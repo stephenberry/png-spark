@@ -29,7 +29,8 @@ fn pixels(info: &Info) -> Vec<u8> {
 
 fn combinations() -> Vec<(ColorType, BitDepth)> {
     let mut all = Vec::new();
-    for depth in [BitDepth::One, BitDepth::Two, BitDepth::Four, BitDepth::Eight, BitDepth::Sixteen] {
+    for depth in [BitDepth::One, BitDepth::Two, BitDepth::Four, BitDepth::Eight, BitDepth::Sixteen]
+    {
         all.push((ColorType::Grayscale, depth));
     }
     for depth in [BitDepth::Eight, BitDepth::Sixteen] {

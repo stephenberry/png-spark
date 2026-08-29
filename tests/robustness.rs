@@ -7,9 +7,8 @@ use png_spark::common::{BitDepth, Chunk, ColorType, Info};
 
 fn valid_png() -> Vec<u8> {
     let info = Info::new(23, 17, ColorType::Rgba, BitDepth::Eight);
-    let data: Vec<u8> = (0..info.output_size())
-        .map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8)
-        .collect();
+    let data: Vec<u8> =
+        (0..info.output_size()).map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8).collect();
     png_spark::encode(&info, &data).unwrap()
 }
 
@@ -45,9 +44,8 @@ fn corruption_of_a_file_carrying_metadata_is_rejected_or_decoded() {
     // corruption sweep has to cover that path too.
     let mut info = Info::new(23, 17, ColorType::Rgba, BitDepth::Eight);
     info.metadata = vec![Chunk::new(*b"apPd", (0..=255u8).collect())];
-    let data: Vec<u8> = (0..info.output_size())
-        .map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8)
-        .collect();
+    let data: Vec<u8> =
+        (0..info.output_size()).map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8).collect();
     let png = png_spark::encode(&info, &data).unwrap();
 
     let mut decoder = png_spark::Decoder::new();
@@ -106,7 +104,7 @@ fn hostile_zlib_streams_do_not_hang_or_panic() {
 fn zlib_headers_with_valid_framing_but_junk_payload_are_rejected() {
     for payload_len in [0usize, 1, 4, 64] {
         let mut stream = vec![0x78, 0x01];
-        stream.extend(std::iter::repeat(0xA5).take(payload_len));
+        stream.extend(std::iter::repeat_n(0xA5, payload_len));
         assert!(png_spark::inflate::decompress_zlib(&stream, 1024).is_err());
     }
 }

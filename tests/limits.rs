@@ -45,10 +45,7 @@ fn the_refusal_costs_nothing_and_does_not_depend_on_the_rest_of_the_file() {
     // Truncated to the signature and `IHDR`: the header is refused before the decoder has
     // any reason to look further, so there is nothing else for it to have read.
     let png = with_dimensions(65535, 65535);
-    assert!(matches!(
-        png_spark::decode(&png[..33]),
-        Err(Error::SizeLimitExceeded { .. })
-    ));
+    assert!(matches!(png_spark::decode(&png[..33]), Err(Error::SizeLimitExceeded { .. })));
 }
 
 #[test]

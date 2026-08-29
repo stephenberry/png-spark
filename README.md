@@ -130,7 +130,7 @@ Payloads are written exactly as given; compress yours first if it is worth compr
 
 **The decompressor is not a state machine.** PNG says up front how many bytes the image data expands to, so the whole stream is decoded in one call against one buffer. That removes the per-symbol state checks and output clamping a resumable decoder needs, and leaves the bit buffer and output cursor in registers.
 
-**Checksums use the hardware.** Adler-32 has an AArch64 dot-product path that runs at roughly 50 GB/s; CRC-32 uses the AArch64 CRC instructions where present and slice-by-16 otherwise. Both fall back to portable code, and every implementation is tested against the same reference.
+**Checksums use the hardware.** Adler-32 has an AArch64 NEON path that runs at roughly 31 GB/s; CRC-32 uses the AArch64 CRC instructions where present and slice-by-16 otherwise. Both fall back to portable code, and every implementation is tested against the same reference.
 
 **Chunk CRCs are checked; the Adler-32 is not, by default.** The Adler-32 inside the compressed stream covers the same bytes the chunk CRC already covered. Checking one of them catches the same file corruption for one pass over the data instead of two. `Decoder::checks(Checks::Full)` turns both on.
 
@@ -156,7 +156,11 @@ The crate is safe Rust apart from four narrow places, each with the invariant th
 python3 tools/gen_testdata.py     # generate the reference corpus (once)
 cargo test                        # 74 tests, no dependencies
 cargo test -p png-spark-bench     # cross-checks against png and fdeflate
+cargo clippy --all-targets        # clean at -D warnings
+cargo fmt --all --check           # style settings live in rustfmt.toml
 ```
+
+Rust 1.96 or newer, edition 2024. CI runs all of the above on Linux, macOS and Windows, across x86-64 and AArch64, plus Miri over the unsafe code and a publish dry run.
 
 The corpus is produced by a reference implementation rather than by png-spark, so the tests check the format and not just self-consistency: 224 zlib streams from zlib itself at every level and window size, and 180 PNGs covering every colour type, bit depth, interlace mode and filter combination. The benchmark crate additionally round-trips png-spark's output through `fdeflate` and the `png` crate, and `fdeflate`'s output back through png-spark.
 

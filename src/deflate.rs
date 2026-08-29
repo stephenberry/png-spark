@@ -13,7 +13,7 @@
 //! wants it should reach for the `png` crate instead.
 
 use crate::adler32::Adler32;
-use crate::huffman::{canonical_codes, Builder};
+use crate::huffman::{Builder, canonical_codes};
 use crate::tables::{CLCL_ORDER, DIST_EXTRA, LEN_BASE, LEN_EXTRA, LEN_TO_SYM};
 
 /// Shortest and longest match this compressor will emit.
@@ -222,14 +222,14 @@ fn count_runs(
     for item in walk_runs(input, start, end) {
         match item {
             Item::Literals(bytes) => {
-                let mut chunks = bytes.chunks_exact(4);
-                for chunk in &mut chunks {
+                let (chunks, remainder) = bytes.as_chunks::<4>();
+                for chunk in chunks {
                     lanes[0][chunk[0] as usize] += 1;
                     lanes[1][chunk[1] as usize] += 1;
                     lanes[2][chunk[2] as usize] += 1;
                     lanes[3][chunk[3] as usize] += 1;
                 }
-                for (lane, &byte) in chunks.remainder().iter().enumerate() {
+                for (lane, &byte) in remainder.iter().enumerate() {
                     lanes[lane][byte as usize] += 1;
                 }
             }
@@ -364,6 +364,7 @@ impl Default for Deflater {
 }
 
 impl Deflater {
+    /// A compressor with empty tables, ready for its first stream.
     pub fn new() -> Self {
         Self {
             litlen_freq: [0; LITLEN_SYMBOLS],
@@ -497,8 +498,15 @@ impl Deflater {
 
         // Disjoint field borrows: the code tables are read while the frequency tables are
         // rebuilt for the next block, and the two never overlap.
-        let Self { litlen_codes, litlen_lengths, dist_codes, dist_lengths, litlen_freq, dist_freq, .. } =
-            self;
+        let Self {
+            litlen_codes,
+            litlen_lengths,
+            dist_codes,
+            dist_lengths,
+            litlen_freq,
+            dist_freq,
+            ..
+        } = self;
         let dist_code = dist_codes[0] as u64;
         let dist_bits = dist_lengths[0] as u32;
 
@@ -521,8 +529,8 @@ impl Deflater {
         for item in walk_runs(input, start, end) {
             match item {
                 Item::Literals(bytes) => {
-                    let mut chunks = bytes.chunks_exact(4);
-                    for chunk in &mut chunks {
+                    let (chunks, remainder) = bytes.as_chunks::<4>();
+                    for chunk in chunks {
                         let (b0, b1, b2, b3) = (
                             chunk[0] as usize,
                             chunk[1] as usize,
@@ -545,7 +553,7 @@ impl Deflater {
                         lanes[2][b2] += 1;
                         lanes[3][b3] += 1;
                     }
-                    for (lane, &byte) in chunks.remainder().iter().enumerate() {
+                    for (lane, &byte) in remainder.iter().enumerate() {
                         writer.write(
                             litlen_codes[byte as usize] as u64,
                             litlen_lengths[byte as usize] as u32,
@@ -725,11 +733,8 @@ impl Deflater {
         for (&frequency, &extra) in self.litlen_freq[257..].iter().zip(LEN_EXTRA.iter()) {
             bits += frequency as u64 * extra as u64;
         }
-        for ((&frequency, &length), &extra) in self
-            .dist_freq
-            .iter()
-            .zip(self.dist_lengths.iter())
-            .zip(DIST_EXTRA.iter())
+        for ((&frequency, &length), &extra) in
+            self.dist_freq.iter().zip(self.dist_lengths.iter()).zip(DIST_EXTRA.iter())
         {
             bits += frequency as u64 * (length as u64 + extra as u64);
         }

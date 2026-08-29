@@ -63,11 +63,7 @@ fn megapixels(pixels: u64, time: Duration) -> f64 {
 }
 
 fn ratio(compressed: u64, raw: u64) -> f64 {
-    if raw == 0 {
-        0.0
-    } else {
-        100.0 * compressed as f64 / raw as f64
-    }
+    if raw == 0 { 0.0 } else { 100.0 * compressed as f64 / raw as f64 }
 }
 
 /// Decodes one file and converts it to the pixel layout the benchmark compares on.
@@ -201,11 +197,7 @@ fn directories(root: &Path) -> Vec<PathBuf> {
     let mut index = 0;
     while index < found.len() {
         let mut children: Vec<PathBuf> = match std::fs::read_dir(&found[index]) {
-            Ok(entries) => entries
-                .flatten()
-                .map(|e| e.path())
-                .filter(|p| p.is_dir())
-                .collect(),
+            Ok(entries) => entries.flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect(),
             Err(_) => Vec::new(),
         };
         children.sort();
@@ -246,10 +238,7 @@ const LABEL_WIDTH: usize = 38;
 const GROUP_WIDTH: usize = 7 + 1 + 9 + 1 + 9;
 
 fn header(speed: &str) {
-    println!(
-        "{:<LABEL_WIDTH$} {:>6} | {:<GROUP_WIDTH$} | png 0.18 ({speed})",
-        "", "", "png-spark",
-    );
+    println!("{:<LABEL_WIDTH$} {:>6} | {:<GROUP_WIDTH$} | png 0.18 ({speed})", "", "", "png-spark",);
     println!(
         "{:<LABEL_WIDTH$} {:>6} | {:>7} {:>9} {:>9} | {:>7} {:>9} {:>9}",
         "directory", "files", "ratio", "enc MP/s", "dec MP/s", "ratio", "enc MP/s", "dec MP/s",
@@ -300,10 +289,7 @@ pub fn run(root: Option<&str>, speed: Option<&str>) {
     // Only for the heading: the default path is written relative to the bench crate.
     let root = std::fs::canonicalize(&root).unwrap_or(root);
     if !root.is_dir() {
-        eprintln!(
-            "no corpus at {}\nrun: python3 tools/fetch_corpus.py image-png",
-            root.display()
-        );
+        eprintln!("no corpus at {}\nrun: python3 tools/fetch_corpus.py image-png", root.display());
         std::process::exit(1);
     }
 

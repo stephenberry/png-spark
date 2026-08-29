@@ -15,9 +15,10 @@ fn info(width: u32, height: u32, color_type: ColorType, bit_depth: BitDepth) -> 
 fn grayscale_bit_depths_scale_to_the_full_range() {
     // 1-bit: 0b1010_0000 is white, black, white, black across four pixels.
     let one = image(info(4, 1, ColorType::Grayscale, BitDepth::One), vec![0b1010_0000]);
-    assert_eq!(one.to_rgba8().unwrap(), [
-        255, 255, 255, 255, 0, 0, 0, 255, 255, 255, 255, 255, 0, 0, 0, 255,
-    ]);
+    assert_eq!(
+        one.to_rgba8().unwrap(),
+        [255, 255, 255, 255, 0, 0, 0, 255, 255, 255, 255, 255, 0, 0, 0, 255,]
+    );
 
     // 2-bit: the four levels must land on 0, 85, 170, 255.
     let two = image(info(4, 1, ColorType::Grayscale, BitDepth::Two), vec![0b00_01_10_11]);
@@ -29,10 +30,8 @@ fn grayscale_bit_depths_scale_to_the_full_range() {
     assert_eq!(four.to_rgb8().unwrap(), [0, 0, 0, 255, 255, 255]);
 
     // 16-bit keeps the high byte.
-    let sixteen = image(
-        info(2, 1, ColorType::Grayscale, BitDepth::Sixteen),
-        vec![0x12, 0x34, 0xAB, 0xCD],
-    );
+    let sixteen =
+        image(info(2, 1, ColorType::Grayscale, BitDepth::Sixteen), vec![0x12, 0x34, 0xAB, 0xCD]);
     assert_eq!(sixteen.to_rgb8().unwrap(), [0x12, 0x12, 0x12, 0xAB, 0xAB, 0xAB]);
 }
 
@@ -59,12 +58,15 @@ fn palettes_resolve_with_per_entry_alpha() {
     indexed.transparency = Some(vec![0, 128]);
 
     let converted = image(indexed, vec![0b00_01_10_11]).to_rgba8().unwrap();
-    assert_eq!(converted, [
-        10, 11, 12, 0, // entry 0, tRNS 0
-        20, 21, 22, 128, // entry 1, tRNS 128
-        30, 31, 32, 255, // entry 2, past the end of tRNS
-        40, 41, 42, 255,
-    ]);
+    assert_eq!(
+        converted,
+        [
+            10, 11, 12, 0, // entry 0, tRNS 0
+            20, 21, 22, 128, // entry 1, tRNS 128
+            30, 31, 32, 255, // entry 2, past the end of tRNS
+            40, 41, 42, 255,
+        ]
+    );
 }
 
 #[test]
@@ -76,10 +78,8 @@ fn alpha_channels_pass_through() {
     assert_eq!(rgba.to_rgba8().unwrap(), [0x11, 0x33, 0x55, 0x77]);
     assert_eq!(rgba.to_rgb8().unwrap(), [0x11, 0x33, 0x55]);
 
-    let grey_alpha = image(
-        info(2, 1, ColorType::GrayscaleAlpha, BitDepth::Eight),
-        vec![9, 200, 60, 0],
-    );
+    let grey_alpha =
+        image(info(2, 1, ColorType::GrayscaleAlpha, BitDepth::Eight), vec![9, 200, 60, 0]);
     assert_eq!(grey_alpha.to_rgba8().unwrap(), [9, 9, 9, 200, 60, 60, 60, 0]);
 }
 

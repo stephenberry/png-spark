@@ -43,6 +43,17 @@ jobs:
       - name: Test (release)
         run: cargo test --release --all-targets
 
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      # Settings live in rustfmt.toml, which states the crate's own style rather than
+      # accepting rustfmt's default line-breaking heuristics.
+      - run: cargo fmt --all --check
+
   clippy:
     runs-on: ubuntu-latest
     steps:
@@ -65,14 +76,14 @@ jobs:
           RUSTDOCFLAGS: -D warnings
 
   msrv:
-    name: msrv (1.80)
+    name: msrv (1.96)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       # Pinned to the `rust-version` in Cargo.toml. Raising one means raising the other.
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.80"
+          toolchain: "1.96"
       - run: cargo check --all-targets
 
   miri:

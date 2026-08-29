@@ -127,7 +127,7 @@
 //! - [`filter`] — the five PNG scanline filters, forward and reverse
 //! - [`decoder`], [`encoder`], [`common`] — the PNG layer itself
 
-#![warn(missing_debug_implementations)]
+#![warn(missing_docs, missing_debug_implementations)]
 
 pub mod adler32;
 pub mod common;
@@ -143,9 +143,7 @@ pub mod tables;
 pub mod transform;
 
 pub use common::{BitDepth, Chunk, ColorType, Info, Interlacing};
-pub use decoder::{
-    decode, read_info, Checks, Decoder, Image, Keep, DEFAULT_MAX_DECOMPRESSED_SIZE,
-};
-pub use encoder::{encode, encode_rgb8, encode_rgba8, Encoder, FilterStrategy};
+pub use decoder::{Checks, DEFAULT_MAX_DECOMPRESSED_SIZE, Decoder, Image, Keep, decode, read_info};
+pub use encoder::{Encoder, FilterStrategy, encode, encode_rgb8, encode_rgba8};
 pub use error::Error;
 pub use filter::Filter;

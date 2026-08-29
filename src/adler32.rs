@@ -44,16 +44,19 @@ impl Default for Adler32 {
 }
 
 impl Adler32 {
+    /// A checksum over no bytes, which Adler-32 defines as 1 rather than 0.
     #[inline]
     pub const fn new() -> Self {
         Self { a: 1, b: 0 }
     }
 
+    /// The checksum of everything fed in so far.
     #[inline]
     pub const fn finish(&self) -> u32 {
         (self.b << 16) | self.a
     }
 
+    /// Folds `data` into the running checksum. Any split into calls gives the same result.
     #[inline]
     pub fn update(&mut self, data: &[u8]) {
         #[cfg(target_arch = "aarch64")]
@@ -73,8 +76,8 @@ fn update_portable(a_out: &mut u32, b_out: &mut u32, data: &[u8]) {
     let (mut a, mut b) = (*a_out, *b_out);
 
     for block in data.chunks(NMAX) {
-        let mut chunks = block.chunks_exact(16);
-        for chunk in &mut chunks {
+        let (chunks, remainder) = block.as_chunks::<16>();
+        for chunk in chunks {
             b += a * 16;
 
             let mut sum = 0u32;
@@ -88,7 +91,7 @@ fn update_portable(a_out: &mut u32, b_out: &mut u32, data: &[u8]) {
             b += weighted;
         }
 
-        for &byte in chunks.remainder() {
+        for &byte in remainder {
             a += byte as u32;
             b += a;
         }
@@ -134,72 +137,70 @@ mod aarch64 {
     /// bytes; splitting those across four independent accumulators keeps every dependency
     /// chain one instruction long, which is what takes this from roughly 8 GB/s to over 30.
     ///
-    /// ARMv8.4's `UDOT` would do the same reduction in a third of the instructions, but it
-    /// is only usable from Rust 1.98, and at 30 GB/s this is already an order of magnitude
-    /// faster than the decompressor it feeds.
+    /// ARMv8.4's `UDOT` would do the same reduction in a third of the instructions, and is
+    /// deliberately left alone: the checksum is not where the time goes. It does not run at
+    /// all on the default decode path, where the chunk CRC already covers the same bytes,
+    /// and it is about 2% of an encode. It would also need Rust 1.98, above this crate's
+    /// floor, but that is the lesser reason and the one that will expire.
     ///
     /// # Safety
     /// Requires the `neon` target feature, which is baseline on aarch64.
     pub unsafe fn update_neon(a_out: &mut u32, b_out: &mut u32, data: &[u8]) {
-        let (mut a, mut b) = (*a_out, *b_out);
+        unsafe {
+            let (mut a, mut b) = (*a_out, *b_out);
 
-        for block in data.chunks(BLOCK) {
-            let mut chunks = block.chunks_exact(64);
-            let full = chunks.len() as u32;
+            for block in data.chunks(BLOCK) {
+                let (chunks, remainder) = block.as_chunks::<64>();
+                let full = chunks.len() as u32;
 
-            if full > 0 {
-                let weights = [
-                    vld1q_u8(WEIGHTS_64.as_ptr()),
-                    vld1q_u8(WEIGHTS_64.as_ptr().add(16)),
-                    vld1q_u8(WEIGHTS_64.as_ptr().add(32)),
-                    vld1q_u8(WEIGHTS_64.as_ptr().add(48)),
-                ];
-
-                let mut s1 = [vdupq_n_u32(0); 2];
-                let mut s2 = [vdupq_n_u32(0); 4];
-                let mut carry = vdupq_n_u32(0);
-
-                for chunk in &mut chunks {
-                    let v = [
-                        vld1q_u8(chunk.as_ptr()),
-                        vld1q_u8(chunk.as_ptr().add(16)),
-                        vld1q_u8(chunk.as_ptr().add(32)),
-                        vld1q_u8(chunk.as_ptr().add(48)),
+                if full > 0 {
+                    let weights = [
+                        vld1q_u8(WEIGHTS_64.as_ptr()),
+                        vld1q_u8(WEIGHTS_64.as_ptr().add(16)),
+                        vld1q_u8(WEIGHTS_64.as_ptr().add(32)),
+                        vld1q_u8(WEIGHTS_64.as_ptr().add(48)),
                     ];
 
-                    let running = vaddq_u32(s1[0], s1[1]);
-                    carry = vaddq_u32(carry, vshlq_n_u32(running, 6));
+                    let mut s1 = [vdupq_n_u32(0); 2];
+                    let mut s2 = [vdupq_n_u32(0); 4];
+                    let mut carry = vdupq_n_u32(0);
 
-                    // Pairwise widening keeps every partial sum in a lane wide enough for a
-                    // whole block; the two accumulators split the dependency chain.
-                    s1[0] = vpadalq_u16(
-                        s1[0],
-                        vaddq_u16(vpaddlq_u8(v[0]), vpaddlq_u8(v[1])),
-                    );
-                    s1[1] = vpadalq_u16(
-                        s1[1],
-                        vaddq_u16(vpaddlq_u8(v[2]), vpaddlq_u8(v[3])),
-                    );
+                    for chunk in chunks {
+                        let v = [
+                            vld1q_u8(chunk.as_ptr()),
+                            vld1q_u8(chunk.as_ptr().add(16)),
+                            vld1q_u8(chunk.as_ptr().add(32)),
+                            vld1q_u8(chunk.as_ptr().add(48)),
+                        ];
 
-                    // Each product is at most 255 * 64 = 16320, which still fits a `u16`.
-                    for i in 0..4 {
-                        let low = vmull_u8(vget_low_u8(v[i]), vget_low_u8(weights[i]));
-                        let high = vmull_u8(vget_high_u8(v[i]), vget_high_u8(weights[i]));
-                        s2[i] = vpadalq_u16(s2[i], vaddq_u16(low, high));
+                        let running = vaddq_u32(s1[0], s1[1]);
+                        carry = vaddq_u32(carry, vshlq_n_u32(running, 6));
+
+                        // Pairwise widening keeps every partial sum in a lane wide enough for a
+                        // whole block; the two accumulators split the dependency chain.
+                        s1[0] = vpadalq_u16(s1[0], vaddq_u16(vpaddlq_u8(v[0]), vpaddlq_u8(v[1])));
+                        s1[1] = vpadalq_u16(s1[1], vaddq_u16(vpaddlq_u8(v[2]), vpaddlq_u8(v[3])));
+
+                        // Each product is at most 255 * 64 = 16320, which still fits a `u16`.
+                        for i in 0..4 {
+                            let low = vmull_u8(vget_low_u8(v[i]), vget_low_u8(weights[i]));
+                            let high = vmull_u8(vget_high_u8(v[i]), vget_high_u8(weights[i]));
+                            s2[i] = vpadalq_u16(s2[i], vaddq_u16(low, high));
+                        }
                     }
+
+                    b += a * (full * 64);
+                    b += vaddvq_u32(carry);
+                    b += vaddvq_u32(vaddq_u32(vaddq_u32(s2[0], s2[1]), vaddq_u32(s2[2], s2[3])));
+                    a += vaddvq_u32(vaddq_u32(s1[0], s1[1]));
                 }
 
-                b += a * (full * 64);
-                b += vaddvq_u32(carry);
-                b += vaddvq_u32(vaddq_u32(vaddq_u32(s2[0], s2[1]), vaddq_u32(s2[2], s2[3])));
-                a += vaddvq_u32(vaddq_u32(s1[0], s1[1]));
+                fold(&mut a, &mut b, remainder);
             }
 
-            fold(&mut a, &mut b, chunks.remainder());
+            *a_out = a;
+            *b_out = b;
         }
-
-        *a_out = a;
-        *b_out = b;
     }
 }
 
@@ -225,8 +226,8 @@ mod tests {
     }
 
     const LENGTHS: [usize; 20] = [
-        0, 1, 5, 15, 16, 17, 31, 32, 33, 63, 64, 65, 100, 5503, 5504, 5505, 11_007, 11_008,
-        11_009, 20_000,
+        0, 1, 5, 15, 16, 17, 31, 32, 33, 63, 64, 65, 100, 5503, 5504, 5505, 11_007, 11_008, 11_009,
+        20_000,
     ];
 
     #[test]

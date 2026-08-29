@@ -150,13 +150,9 @@ fn the_encoder_refuses_chunk_types_it_must_not_write() {
     let refused = [
         // Critical: a decoder that does not know the type has to fail on it, so writing one
         // would produce a file png-spark could not read back.
-        *b"ApPd",
-        *b"IDAT",
-        // The third byte is reserved, and must be upper case.
-        *b"appd",
-        // Chunk types are four ASCII letters.
-        *b"ap0d",
-        *b"ap d",
+        *b"ApPd", *b"IDAT", // The third byte is reserved, and must be upper case.
+        *b"appd", // Chunk types are four ASCII letters.
+        *b"ap0d", *b"ap d",
     ];
     for kind in refused {
         let (info, data) = image(vec![Chunk::new(kind, b"payload".to_vec())]);

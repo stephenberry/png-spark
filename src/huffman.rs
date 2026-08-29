@@ -73,6 +73,7 @@ impl Default for Builder {
 }
 
 impl Builder {
+    /// A builder with its scratch arrays allocated, ready to fit its first code.
     pub fn new() -> Self {
         Self { order: [0; 288], weights: [0; 576], parents: [0; 576] }
     }
@@ -192,20 +193,12 @@ mod tests {
     use super::*;
 
     fn is_complete(lengths: &[u8]) -> bool {
-        let total: u64 = lengths
-            .iter()
-            .filter(|&&l| l > 0)
-            .map(|&l| 1u64 << (15 - l))
-            .sum();
+        let total: u64 = lengths.iter().filter(|&&l| l > 0).map(|&l| 1u64 << (15 - l)).sum();
         total == 1 << 15
     }
 
     fn weighted_bits(frequencies: &[u32], lengths: &[u8]) -> u64 {
-        frequencies
-            .iter()
-            .zip(lengths)
-            .map(|(&f, &l)| f as u64 * l as u64)
-            .sum()
+        frequencies.iter().zip(lengths).map(|(&f, &l)| f as u64 * l as u64).sum()
     }
 
     #[test]

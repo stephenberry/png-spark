@@ -4,7 +4,7 @@ use crate::common::{Chunk, ColorType, Info, SIGNATURE};
 use crate::crc32::crc32;
 use crate::deflate::Deflater;
 use crate::error::Error;
-use crate::filter::{filter_row, Filter};
+use crate::filter::{Filter, filter_row};
 
 /// How the encoder picks a filter for each scanline.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -89,6 +89,10 @@ impl Default for Encoder {
 }
 
 impl Encoder {
+    /// An encoder with the default filter strategy.
+    ///
+    /// It holds the Huffman tables and scratch buffers, so encoding a second image through
+    /// the same one costs no allocation for them.
     pub fn new() -> Self {
         Self {
             deflater: Deflater::new(),
@@ -113,21 +117,15 @@ impl Encoder {
     pub fn encode(&mut self, info: &Info, data: &[u8], output: &mut Vec<u8>) -> Result<(), Error> {
         info.validate()?;
         if data.len() != info.output_size() {
-            return Err(Error::WrongBufferSize {
-                expected: info.output_size(),
-                found: data.len(),
-            });
+            return Err(Error::WrongBufferSize { expected: info.output_size(), found: data.len() });
         }
         if info.color_type == ColorType::Indexed && info.palette.is_none() {
             return Err(Error::MissingPalette);
         }
-        if let Some(palette) = &info.palette {
-            if palette.len() > 256 * 3 || palette.len() % 3 != 0 {
-                return Err(Error::InvalidChunkLength {
-                    chunk: *b"PLTE",
-                    length: palette.len(),
-                });
-            }
+        if let Some(palette) = &info.palette
+            && (palette.len() > 256 * 3 || !palette.len().is_multiple_of(3))
+        {
+            return Err(Error::InvalidChunkLength { chunk: *b"PLTE", length: palette.len() });
         }
         if let Some(transparency) = &info.transparency {
             crate::decoder::validate_trns(info, transparency)?;
@@ -217,9 +215,7 @@ impl Encoder {
             let filter = match self.strategy {
                 FilterStrategy::Fixed(filter) => filter,
                 FilterStrategy::Adaptive => choose_filter::<BPP>(previous, row, 1, chosen),
-                FilterStrategy::Sampled => {
-                    choose_filter::<BPP>(previous, row, SAMPLE_STEP, chosen)
-                }
+                FilterStrategy::Sampled => choose_filter::<BPP>(previous, row, SAMPLE_STEP, chosen),
             };
             chosen = filter;
 
@@ -316,12 +312,8 @@ fn residual_score<const BPP: usize, const FILTER: u8>(
     while index + BPP <= length {
         for offset in 0..BPP {
             let i = index + offset;
-            total += magnitude(residual::<FILTER>(
-                row[i],
-                row[i - BPP],
-                previous[i],
-                previous[i - BPP],
-            ));
+            total +=
+                magnitude(residual::<FILTER>(row[i], row[i - BPP], previous[i], previous[i - BPP]));
         }
         index += stride;
     }
@@ -371,9 +363,8 @@ fn magnitude(residual: u8) -> u64 {
 fn precedes_palette(chunk: &Chunk) -> bool {
     /// The eight types the specification orders before `PLTE`. Every other ancillary type
     /// is either required after `PLTE`, like `bKGD` and `hIST`, or unconstrained.
-    const BEFORE_PLTE: [[u8; 4]; 8] = [
-        *b"cHRM", *b"gAMA", *b"iCCP", *b"sBIT", *b"sRGB", *b"cICP", *b"mDCv", *b"cLLi",
-    ];
+    const BEFORE_PLTE: [[u8; 4]; 8] =
+        [*b"cHRM", *b"gAMA", *b"iCCP", *b"sBIT", *b"sRGB", *b"cICP", *b"mDCv", *b"cLLi"];
     BEFORE_PLTE.contains(&chunk.kind)
 }
 

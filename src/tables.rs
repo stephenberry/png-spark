@@ -7,9 +7,8 @@ pub const LEN_BASE: [u16; 29] = [
 ];
 
 /// Number of extra bits following literal/length symbols 257..=285.
-pub const LEN_EXTRA: [u8; 29] = [
-    0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0,
-];
+pub const LEN_EXTRA: [u8; 29] =
+    [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0];
 
 /// Base match distance for distance symbols 0..=29.
 pub const DIST_BASE: [u16; 30] = [
@@ -24,9 +23,7 @@ pub const DIST_EXTRA: [u8; 30] = [
 ];
 
 /// The order in which code length code lengths appear in a dynamic block header.
-pub const CLCL_ORDER: [u8; 19] = [
-    16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15,
-];
+pub const CLCL_ORDER: [u8; 19] = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15];
 
 /// Code lengths of the fixed literal/length Huffman code.
 pub const FIXED_LITLEN_LENGTHS: [u8; 288] = {

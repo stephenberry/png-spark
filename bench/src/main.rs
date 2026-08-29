@@ -24,7 +24,7 @@ use std::time::{Duration, Instant};
 
 mod cases;
 mod corpus;
-use cases::{load_images, TestImage};
+use cases::{TestImage, load_images};
 
 /// Runs `body` enough times to get a stable figure and returns the best wall time.
 ///
@@ -72,12 +72,7 @@ fn report(title: &str, rows: &[Row]) {
     for row in rows {
         let speedup = row.theirs.as_secs_f64() / row.ours.as_secs_f64();
         let sizes = match (row.our_size, row.their_size) {
-            (Some(a), Some(b)) => format!(
-                "{:>11} {:>11} {:>7.3}x",
-                a,
-                b,
-                a as f64 / b as f64
-            ),
+            (Some(a), Some(b)) => format!("{:>11} {:>11} {:>7.3}x", a, b, a as f64 / b as f64),
             _ => format!("{:>11} {:>11} {:>8}", "-", "-", "-"),
         };
         println!(
@@ -99,11 +94,7 @@ fn report(title: &str, rows: &[Row]) {
         total_theirs.as_secs_f64() / total_ours.as_secs_f64()
     );
     if total_their_size > 0 {
-        println!(
-            "{:<22} {:>47.3}x size",
-            "",
-            total_our_size as f64 / total_their_size as f64
-        );
+        println!("{:<22} {:>47.3}x size", "", total_our_size as f64 / total_their_size as f64);
     }
 }
 
@@ -114,12 +105,9 @@ fn bench_inflate(images: &[TestImage]) {
         let stream = &image.zlib_stream;
         let expected = image.raw_stream.len();
 
-        let (ours, _) = measure(|| {
-            png_spark::inflate::decompress_zlib(stream, expected).unwrap().len()
-        });
-        let (theirs, _) = measure(|| {
-            fdeflate::decompress_to_vec(stream).unwrap().len()
-        });
+        let (ours, _) =
+            measure(|| png_spark::inflate::decompress_zlib(stream, expected).unwrap().len());
+        let (theirs, _) = measure(|| fdeflate::decompress_to_vec(stream).unwrap().len());
 
         // Split out the two halves of the work so a regression can be attributed.
         let mut buffer = vec![0u8; expected + png_spark::inflate::OUTPUT_SLACK];
@@ -397,7 +385,7 @@ fn bench_sizes(images: &[TestImage]) {
 /// against exactly the same input.
 fn dump_filtered(images: &[TestImage]) {
     use png_spark::common::Info;
-    use png_spark::filter::{filter_row, Filter};
+    use png_spark::filter::{Filter, filter_row};
 
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../tmp/filtered");
     std::fs::create_dir_all(&dir).unwrap();
@@ -453,17 +441,14 @@ fn bench_files(filter: Option<&str>) {
     paths.sort();
 
     println!("\n=== per-file compression ===");
-    println!(
-        "{:<26} {:>9} {:>10} {:>7}",
-        "file", "raw", "compressed", "MB/s"
-    );
+    println!("{:<26} {:>9} {:>10} {:>7}", "file", "raw", "compressed", "MB/s");
     for path in paths {
         let data = std::fs::read(&path).unwrap();
         let name = path.file_stem().unwrap().to_string_lossy().into_owned();
-        if let Some(want) = filter {
-            if !name.contains(want) {
-                continue;
-            }
+        if let Some(want) = filter
+            && !name.contains(want)
+        {
+            continue;
         }
         let mut line = format!("{:<26} {:>9}", name, data.len());
         let mut deflater = Deflater::new();
@@ -486,10 +471,7 @@ fn main() {
         return;
     }
     if what == "corpus" {
-        corpus::run(
-            std::env::args().nth(2).as_deref(),
-            std::env::args().nth(3).as_deref(),
-        );
+        corpus::run(std::env::args().nth(2).as_deref(), std::env::args().nth(3).as_deref());
         return;
     }
     let images = load_images();

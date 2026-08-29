@@ -39,8 +39,8 @@ fn deflate_output_decodes_with_fdeflate() {
     for (name, data) in corpus() {
         let mut compressed = Vec::new();
         deflater.zlib(&data, &mut compressed);
-        let decoded = fdeflate::decompress_to_vec(&compressed)
-            .unwrap_or_else(|e| panic!("{name}: {e:?}"));
+        let decoded =
+            fdeflate::decompress_to_vec(&compressed).unwrap_or_else(|e| panic!("{name}: {e:?}"));
         assert_eq!(decoded, data, "{name}");
     }
 }
@@ -78,18 +78,16 @@ fn encoded_pngs_decode_with_the_png_crate() {
             .then(|| (0..256u32).flat_map(|i| [i as u8, (i * 3) as u8, (i * 11) as u8]).collect());
         let mut info = Info::new(61, 37, color_type, bit_depth);
         info.palette = palette;
-        let data: Vec<u8> = (0..info.output_size())
-            .map(|i| (i.wrapping_mul(2_654_435_761) >> 11) as u8)
-            .collect();
+        let data: Vec<u8> =
+            (0..info.output_size()).map(|i| (i.wrapping_mul(2_654_435_761) >> 11) as u8).collect();
 
         for strategy in [FilterStrategy::Adaptive, FilterStrategy::Sampled] {
             let mut out = Vec::new();
             encoder.filter(strategy).encode(&info, &data, &mut out).unwrap();
 
             let decoder = png::Decoder::new(std::io::Cursor::new(&out));
-            let mut reader = decoder
-                .read_info()
-                .unwrap_or_else(|e| panic!("{color_type:?}/{bit_depth:?}: {e}"));
+            let mut reader =
+                decoder.read_info().unwrap_or_else(|e| panic!("{color_type:?}/{bit_depth:?}: {e}"));
             let mut buffer = vec![0; reader.output_buffer_size().unwrap()];
             let frame = reader.next_frame(&mut buffer).unwrap();
             assert_eq!(
@@ -111,9 +109,8 @@ fn private_chunks_are_ignored_by_the_png_crate() {
         Chunk::new(*b"apPd", (0..=255u8).collect()),
         Chunk::new(*b"bnDl", b"arbitrary bytes\0with a null".to_vec()),
     ];
-    let data: Vec<u8> = (0..info.output_size())
-        .map(|i| (i.wrapping_mul(2_654_435_761) >> 11) as u8)
-        .collect();
+    let data: Vec<u8> =
+        (0..info.output_size()).map(|i| (i.wrapping_mul(2_654_435_761) >> 11) as u8).collect();
     let png = png_spark::encode(&info, &data).unwrap();
 
     let decoder = png::Decoder::new(std::io::Cursor::new(&png));

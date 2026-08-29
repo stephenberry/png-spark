@@ -1,0 +1,7 @@
+# This code is written to the full line rather than to rustfmt's default heuristics, which
+# break a call or a chain at 60% of `max_width` and gain nothing by it. `Max` states the
+# style the crate already has: one line until it reaches `max_width`.
+use_small_heuristics = "Max"
+
+# Pinned so the formatting does not shift under the crate's edition.
+style_edition = "2024"

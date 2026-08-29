@@ -5,7 +5,7 @@
 //! is the same instruction to over-allocate wearing different clothes.
 
 use png_spark::deflate::compress_zlib;
-use png_spark::inflate::{decompress_zlib_to_vec, InflateError};
+use png_spark::inflate::{InflateError, decompress_zlib_to_vec};
 
 /// Something that compresses, at a few different scales relative to the first guess.
 fn sample(len: usize) -> Vec<u8> {

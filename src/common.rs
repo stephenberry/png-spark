@@ -9,14 +9,23 @@ pub const SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(u8)]
 pub enum ColorType {
+    /// One grey sample per pixel.
     Grayscale = 0,
+    /// Three samples per pixel: red, green, blue.
     Rgb = 2,
+    /// One palette index per pixel, with the colours themselves in `PLTE`.
     Indexed = 3,
+    /// A grey sample and an alpha sample per pixel.
     GrayscaleAlpha = 4,
+    /// Four samples per pixel: red, green, blue, alpha.
     Rgba = 6,
 }
 
 impl ColorType {
+    /// Reads a colour type from its `IHDR` byte, which is the discriminant itself.
+    ///
+    /// PNG leaves 1, 5, 7 and everything above undefined, and those are the values that
+    /// produce [`Error::InvalidColorType`].
     pub fn from_byte(byte: u8) -> Result<Self, Error> {
         match byte {
             0 => Ok(ColorType::Grayscale),
@@ -44,21 +53,29 @@ impl ColorType {
     pub const fn has_alpha(self) -> bool {
         matches!(self, ColorType::GrayscaleAlpha | ColorType::Rgba)
     }
-
 }
 
 /// Bits per sample.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 #[repr(u8)]
 pub enum BitDepth {
+    /// One bit per sample; eight samples to the byte.
     One = 1,
+    /// Two bits per sample; four samples to the byte.
     Two = 2,
+    /// Four bits per sample; two samples to the byte.
     Four = 4,
+    /// One byte per sample.
     Eight = 8,
+    /// Two bytes per sample, stored most significant byte first.
     Sixteen = 16,
 }
 
 impl BitDepth {
+    /// Reads a bit depth from its `IHDR` byte, which is the discriminant itself.
+    ///
+    /// `None` for a value PNG does not define. Whether a defined depth is legal for a
+    /// particular colour type is a separate question, and not one this answers.
     pub fn from_byte(byte: u8) -> Option<Self> {
         match byte {
             1 => Some(BitDepth::One),
@@ -70,6 +87,7 @@ impl BitDepth {
         }
     }
 
+    /// Bits per sample, which is the discriminant itself.
     #[inline]
     pub const fn bits(self) -> usize {
         self as usize
@@ -79,7 +97,10 @@ impl BitDepth {
 /// Whether the image is stored progressively.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Interlacing {
+    /// Scanlines in order, top to bottom.
     None,
+    /// Seven passes over a subsampled grid, so a partial file shows the whole image
+    /// coarsely. See [`ADAM7_PASSES`].
     Adam7,
 }
 
@@ -132,6 +153,10 @@ pub struct Chunk {
 }
 
 impl Chunk {
+    /// Pairs a four-byte chunk type with its payload.
+    ///
+    /// Neither is checked here: the encoder is where an unwritable type is refused, and
+    /// [`Chunk::validate`] is where the rules are.
     pub fn new(kind: [u8; 4], data: Vec<u8>) -> Self {
         Self { kind, data }
     }
@@ -178,10 +203,21 @@ pub(crate) fn writable_kind(kind: [u8; 4]) -> bool {
 /// Everything `IHDR` and the colour chunks say about an image.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Info {
+    /// Width in pixels. Zero is not a valid image.
     pub width: u32,
+    /// Height in pixels. Zero is not a valid image.
     pub height: u32,
+    /// How samples are laid out within a pixel.
+    ///
+    /// Not the whole story on transparency, since `tRNS` carries alpha for colour types
+    /// that have no alpha sample. [`Info::has_alpha`] is the question to ask about an image.
     pub color_type: ColorType,
+    /// Bits per sample. Not every depth is legal for every colour type.
     pub bit_depth: BitDepth,
+    /// Whether the file stores the image progressively.
+    ///
+    /// The decoder resolves Adam7 and hands back a normal image; the encoder only writes
+    /// [`Interlacing::None`].
     pub interlacing: Interlacing,
     /// `PLTE` contents: RGB triples, present for indexed images.
     pub palette: Option<Vec<u8>>,
@@ -256,11 +292,7 @@ impl Info {
     #[inline]
     pub const fn filter_stride(&self) -> usize {
         let bits = self.bits_per_pixel();
-        if bits < 8 {
-            1
-        } else {
-            bits / 8
-        }
+        if bits < 8 { 1 } else { bits / 8 }
     }
 
     /// Bytes in one scanline of a non-interlaced image.
@@ -285,12 +317,9 @@ impl Info {
                 let bits = self.bits_per_pixel();
                 (0..7)
                     .map(|pass| {
-                        let (w, h) = adam7_pass_size(pass, self.width as usize, self.height as usize);
-                        if w == 0 || h == 0 {
-                            0
-                        } else {
-                            (1 + row_bytes_for(w, bits)) * h
-                        }
+                        let (w, h) =
+                            adam7_pass_size(pass, self.width as usize, self.height as usize);
+                        if w == 0 || h == 0 { 0 } else { (1 + row_bytes_for(w, bits)) * h }
                     })
                     .sum()
             }
@@ -324,7 +353,6 @@ impl Info {
         }
         Ok(())
     }
-
 }
 
 /// Allocates `len` zeroed bytes, returning `None` rather than aborting when the allocator

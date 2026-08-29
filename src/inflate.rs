@@ -65,7 +65,10 @@ pub enum InflateError {
     /// The trailing Adler-32 checksum does not match the decompressed data.
     WrongChecksum,
     /// The allocator could not provide an output buffer of the requested size.
-    OutOfMemory { bytes: usize },
+    OutOfMemory {
+        /// Size of the allocation the allocator refused.
+        bytes: usize,
+    },
 }
 
 impl core::fmt::Display for InflateError {
@@ -492,6 +495,10 @@ impl Default for Inflater {
 }
 
 impl Inflater {
+    /// A decompressor with its Huffman tables allocated but not yet filled.
+    ///
+    /// The tables are about twenty kilobytes, so reuse one across streams rather than
+    /// building a decompressor per call.
     pub fn new() -> Self {
         Self {
             litlen: vec![0u32; LITLEN_TABLE_SIZE].into_boxed_slice().try_into().unwrap(),
@@ -780,13 +787,15 @@ impl Inflater {
     /// by at most six over the literals it then writes speculatively.
     #[inline(always)]
     unsafe fn store_literals(output: &mut [u8], pos: usize, entry: u32) {
-        debug_assert!(pos + 2 <= output.len());
-        // One unaligned halfword rather than two byte stores. Written separately the pair
-        // never gets merged, and the second store's address has to be materialized on its
-        // own instead of folding into the first store's register offset.
-        let target = output.as_mut_ptr().add(pos);
-        let pair = ((entry >> 16) as u16).to_le_bytes();
-        target.cast::<[u8; 2]>().write_unaligned(pair);
+        unsafe {
+            debug_assert!(pos + 2 <= output.len());
+            // One unaligned halfword rather than two byte stores. Written separately the pair
+            // never gets merged, and the second store's address has to be materialized on its
+            // own instead of folding into the first store's register offset.
+            let target = output.as_mut_ptr().add(pos);
+            let pair = ((entry >> 16) as u16).to_le_bytes();
+            target.cast::<[u8; 2]>().write_unaligned(pair);
+        }
     }
 
     /// Copies sixteen bytes within `output`, from `source` to `dest`.
@@ -800,9 +809,11 @@ impl Inflater {
     /// `source + 16 <= output.len()` and `dest + 16 <= output.len()`.
     #[inline(always)]
     unsafe fn copy16(output: &mut [u8], source: usize, dest: usize) {
-        debug_assert!(source + 16 <= output.len() && dest + 16 <= output.len());
-        let chunk = output.as_ptr().add(source).cast::<[u8; 16]>().read_unaligned();
-        output.as_mut_ptr().add(dest).cast::<[u8; 16]>().write_unaligned(chunk);
+        unsafe {
+            debug_assert!(source + 16 <= output.len() && dest + 16 <= output.len());
+            let chunk = output.as_ptr().add(source).cast::<[u8; 16]>().read_unaligned();
+            output.as_mut_ptr().add(dest).cast::<[u8; 16]>().write_unaligned(chunk);
+        }
     }
 
     /// Writes sixteen bytes at `dest`.
@@ -811,8 +822,10 @@ impl Inflater {
     /// `dest + 16 <= output.len()`.
     #[inline(always)]
     unsafe fn store16(output: &mut [u8], dest: usize, value: [u8; 16]) {
-        debug_assert!(dest + 16 <= output.len());
-        output.as_mut_ptr().add(dest).cast::<[u8; 16]>().write_unaligned(value);
+        unsafe {
+            debug_assert!(dest + 16 <= output.len());
+            output.as_mut_ptr().add(dest).cast::<[u8; 16]>().write_unaligned(value);
+        }
     }
 
     /// Decodes one compressed block, returning the new output position.
@@ -963,11 +976,7 @@ impl Inflater {
                     if symbol >= 30 {
                         break 'block Err(InflateError::InvalidDistanceCode);
                     }
-                    (
-                        DIST_BASE[symbol] as u32,
-                        DIST_EXTRA[symbol] as u32,
-                        (secondary & 0xf) as u32,
-                    )
+                    (DIST_BASE[symbol] as u32, DIST_EXTRA[symbol] as u32, (secondary & 0xf) as u32)
                 } else {
                     break 'block Err(InflateError::InvalidDistanceCode);
                 };
@@ -1075,8 +1084,7 @@ pub fn decompress_zlib_to_vec(input: &[u8], max_output: usize) -> Result<Vec<u8>
         let request = capacity
             .checked_add(OUTPUT_SLACK)
             .ok_or(InflateError::OutOfMemory { bytes: capacity })?;
-        let mut output =
-            zeroed_vec(request).ok_or(InflateError::OutOfMemory { bytes: request })?;
+        let mut output = zeroed_vec(request).ok_or(InflateError::OutOfMemory { bytes: request })?;
         match inflater.zlib_at_most(input, &mut output) {
             Ok(written) => {
                 output.truncate(written);

@@ -35,11 +35,7 @@ impl Image {
     }
 
     fn expand(&self, output: &mut [u8], with_alpha: bool) -> Result<(), Error> {
-        if with_alpha {
-            self.expand_rows::<4>(output)
-        } else {
-            self.expand_rows::<3>(output)
-        }
+        if with_alpha { self.expand_rows::<4>(output) } else { self.expand_rows::<3>(output) }
     }
 
     fn expand_rows<const CHANNELS: usize>(&self, output: &mut [u8]) -> Result<(), Error> {
@@ -134,7 +130,7 @@ fn grey_row<const CHANNELS: usize, const BITS: usize>(
     target: &mut [u8],
     key: Option<u16>,
 ) {
-    for (x, pixel) in target.chunks_exact_mut(CHANNELS).enumerate() {
+    for (x, pixel) in target.as_chunks_mut::<CHANNELS>().0.iter_mut().enumerate() {
         let raw = sample::<BITS>(row, x);
         let grey = scale_to_byte::<BITS>(raw);
         let alpha = if key == Some(raw) { 0 } else { 255 };
@@ -145,7 +141,7 @@ fn grey_row<const CHANNELS: usize, const BITS: usize>(
 /// Grey plus alpha. `tRNS` does not apply: the alpha channel is already explicit.
 fn grey_alpha_row<const CHANNELS: usize, const WIDE: bool>(row: &[u8], target: &mut [u8]) {
     let (stride, step) = if WIDE { (4, 2) } else { (2, 1) };
-    for (x, pixel) in target.chunks_exact_mut(CHANNELS).enumerate() {
+    for (x, pixel) in target.as_chunks_mut::<CHANNELS>().0.iter_mut().enumerate() {
         let base = x * stride;
         let (grey, alpha) = (row[base], row[base + step]);
         pixel.copy_from_slice(&[grey, grey, grey, alpha][..CHANNELS]);
@@ -165,7 +161,7 @@ fn rgb_row<const CHANNELS: usize, const WIDE: bool>(
     }
 
     let (stride, step) = if WIDE { (6, 2) } else { (3, 1) };
-    for (x, pixel) in target.chunks_exact_mut(CHANNELS).enumerate() {
+    for (x, pixel) in target.as_chunks_mut::<CHANNELS>().0.iter_mut().enumerate() {
         let base = x * stride;
         let (r, g, b) = (row[base], row[base + step], row[base + 2 * step]);
         // `tRNS` names a colour at the file's own depth, so a 16-bit image is compared at
@@ -177,11 +173,7 @@ fn rgb_row<const CHANNELS: usize, const WIDE: bool>(
                 } else {
                     [r as u16, g as u16, b as u16]
                 };
-                if raw == key {
-                    0
-                } else {
-                    255
-                }
+                if raw == key { 0 } else { 255 }
             }
             None => 255,
         };
@@ -197,14 +189,9 @@ fn rgba_row<const CHANNELS: usize, const WIDE: bool>(row: &[u8], target: &mut [u
     }
 
     let (stride, step) = if WIDE { (8, 2) } else { (4, 1) };
-    for (x, pixel) in target.chunks_exact_mut(CHANNELS).enumerate() {
+    for (x, pixel) in target.as_chunks_mut::<CHANNELS>().0.iter_mut().enumerate() {
         let base = x * stride;
-        let rgba = [
-            row[base],
-            row[base + step],
-            row[base + 2 * step],
-            row[base + 3 * step],
-        ];
+        let rgba = [row[base], row[base + step], row[base + 2 * step], row[base + 3 * step]];
         pixel.copy_from_slice(&rgba[..CHANNELS]);
     }
 }
@@ -215,16 +202,12 @@ fn indexed_row<const CHANNELS: usize, const BITS: usize>(
     palette: &[u8],
     transparency: Option<&[u8]>,
 ) -> Result<(), Error> {
-    for (x, pixel) in target.chunks_exact_mut(CHANNELS).enumerate() {
+    for (x, pixel) in target.as_chunks_mut::<CHANNELS>().0.iter_mut().enumerate() {
         let index = sample::<BITS>(row, x) as usize;
         let entry = index * 3;
-        let rgb = palette
-            .get(entry..entry + 3)
-            .ok_or(Error::PaletteIndexOutOfRange)?;
+        let rgb = palette.get(entry..entry + 3).ok_or(Error::PaletteIndexOutOfRange)?;
         // A `tRNS` shorter than the palette leaves the entries past its end opaque.
-        let alpha = transparency
-            .and_then(|t| t.get(index).copied())
-            .unwrap_or(255);
+        let alpha = transparency.and_then(|t| t.get(index).copied()).unwrap_or(255);
         pixel.copy_from_slice(&[rgb[0], rgb[1], rgb[2], alpha][..CHANNELS]);
     }
     Ok(())

@@ -1,8 +1,8 @@
 //! PNG decoding.
 
 use crate::common::{
-    adam7_pass_size, row_bytes_for, writable_kind, zeroed_vec, BitDepth, Chunk, ColorType, Info,
-    Interlacing, ADAM7_PASSES, SIGNATURE,
+    ADAM7_PASSES, BitDepth, Chunk, ColorType, Info, Interlacing, SIGNATURE, adam7_pass_size,
+    row_bytes_for, writable_kind, zeroed_vec,
 };
 use crate::crc32::crc32;
 use crate::error::Error;
@@ -12,6 +12,7 @@ use crate::inflate::{Inflater, OUTPUT_SLACK};
 /// A decoded image and the description of its pixel layout.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Image {
+    /// The image's dimensions and layout, along with any chunks the decoder was asked to keep.
     pub info: Info,
     /// Pixel data in the image's own format, tightly packed, with no filter bytes and no
     /// padding between rows beyond what a sub-byte bit depth requires.
@@ -19,21 +20,25 @@ pub struct Image {
 }
 
 impl Image {
+    /// Width in pixels.
     #[inline]
     pub fn width(&self) -> u32 {
         self.info.width
     }
 
+    /// Height in pixels.
     #[inline]
     pub fn height(&self) -> u32 {
         self.info.height
     }
 
+    /// How samples are laid out within a pixel of [`Image::data`].
     #[inline]
     pub fn color_type(&self) -> ColorType {
         self.info.color_type
     }
 
+    /// Bits per sample in [`Image::data`].
     #[inline]
     pub fn bit_depth(&self) -> BitDepth {
         self.info.bit_depth
@@ -133,6 +138,8 @@ impl Default for Decoder {
 }
 
 impl Decoder {
+    /// A decoder that checks chunk CRCs, keeps no metadata, and refuses an image declaring
+    /// more than [`DEFAULT_MAX_DECOMPRESSED_SIZE`] bytes.
     pub fn new() -> Self {
         Self {
             inflater: Inflater::new(),
@@ -356,7 +363,7 @@ fn absorb(
 ) -> Result<(), Error> {
     match &chunk.kind {
         b"PLTE" => {
-            if chunk.data.len() > 256 * 3 || chunk.data.len() % 3 != 0 {
+            if chunk.data.len() > 256 * 3 || !chunk.data.len().is_multiple_of(3) {
                 return Err(Error::InvalidChunkLength {
                     chunk: chunk.kind,
                     length: chunk.data.len(),
@@ -456,8 +463,7 @@ impl<'a> ChunkReader<'a> {
                 return Err(Error::TruncatedChunk);
             }
 
-            let length =
-                u32::from_be_bytes(self.data[self.pos..self.pos + 4].try_into().unwrap());
+            let length = u32::from_be_bytes(self.data[self.pos..self.pos + 4].try_into().unwrap());
             // The specification caps chunk lengths at 2^31 - 1.
             if length > i32::MAX as u32 {
                 return Err(Error::TruncatedChunk);
@@ -473,9 +479,8 @@ impl<'a> ChunkReader<'a> {
 
             let data = &self.data[body_start..body_start + length];
             if self.verify {
-                let stored = u32::from_be_bytes(
-                    self.data[body_start + length..end].try_into().unwrap(),
-                );
+                let stored =
+                    u32::from_be_bytes(self.data[body_start + length..end].try_into().unwrap());
                 if crc32(&self.data[self.pos + 4..body_start + length]) != stored {
                     if is_critical(kind) {
                         return Err(Error::BadChunkCrc { chunk: kind });
@@ -503,10 +508,8 @@ fn parse_ihdr(data: &[u8]) -> Result<Info, Error> {
 
     let width = u32::from_be_bytes(data[0..4].try_into().unwrap());
     let height = u32::from_be_bytes(data[4..8].try_into().unwrap());
-    let bit_depth = BitDepth::from_byte(data[8]).ok_or(Error::InvalidBitDepth {
-        color_type: data[9],
-        bit_depth: data[8],
-    })?;
+    let bit_depth = BitDepth::from_byte(data[8])
+        .ok_or(Error::InvalidBitDepth { color_type: data[9], bit_depth: data[8] })?;
     let color_type = ColorType::from_byte(data[9])?;
 
     if data[10] != 0 {
@@ -542,7 +545,7 @@ pub(crate) fn validate_trns(info: &Info, data: &[u8]) -> Result<(), Error> {
             return Ok(());
         }
         ColorType::GrayscaleAlpha | ColorType::Rgba => {
-            return Err(Error::InvalidChunkLength { chunk: *b"tRNS", length: data.len() })
+            return Err(Error::InvalidChunkLength { chunk: *b"tRNS", length: data.len() });
         }
     };
     if data.len() != expected {

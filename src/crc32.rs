@@ -55,16 +55,19 @@ impl Default for Crc32 {
 }
 
 impl Crc32 {
+    /// A checksum over no bytes.
     #[inline]
     pub const fn new() -> Self {
         Self { state: !0 }
     }
 
+    /// Folds `data` into the running checksum. Any split into calls gives the same result.
     #[inline]
     pub fn update(&mut self, data: &[u8]) {
         self.state = update(self.state, data);
     }
 
+    /// The checksum of everything fed in so far.
     #[inline]
     pub const fn finish(&self) -> u32 {
         !self.state
@@ -90,8 +93,8 @@ fn update(state: u32, data: &[u8]) -> u32 {
 }
 
 fn update_portable(mut state: u32, data: &[u8]) -> u32 {
-    let mut chunks = data.chunks_exact(16);
-    for chunk in &mut chunks {
+    let (chunks, remainder) = data.as_chunks::<16>();
+    for chunk in chunks {
         // The first four bytes are mixed into the running state; the remaining twelve are
         // looked up directly since nothing precedes them.
         let a = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]) ^ state;
@@ -117,7 +120,7 @@ fn update_portable(mut state: u32, data: &[u8]) -> u32 {
             ^ TABLES[0][(d >> 24) as usize];
     }
 
-    for &byte in chunks.remainder() {
+    for &byte in remainder {
         state = (state >> 8) ^ TABLES[0][((state ^ byte as u32) & 0xff) as usize];
     }
 
@@ -151,11 +154,11 @@ mod crc_hw {
     /// The `crc` target feature must be available on the current CPU.
     #[target_feature(enable = "crc")]
     pub unsafe fn update(mut state: u32, data: &[u8]) -> u32 {
-        let mut chunks = data.chunks_exact(8);
-        for chunk in &mut chunks {
-            state = __crc32d(state, u64::from_le_bytes(chunk.try_into().unwrap()));
+        let (chunks, remainder) = data.as_chunks::<8>();
+        for chunk in chunks {
+            state = __crc32d(state, u64::from_le_bytes(*chunk));
         }
-        for &byte in chunks.remainder() {
+        for &byte in remainder {
             state = __crc32b(state, byte);
         }
         state
@@ -176,7 +179,8 @@ mod tests {
 
     #[test]
     fn matches_bytewise_reference() {
-        let data: Vec<u8> = (0..1024u32).map(|i| (i.wrapping_mul(2654435761) >> 13) as u8).collect();
+        let data: Vec<u8> =
+            (0..1024u32).map(|i| (i.wrapping_mul(2654435761) >> 13) as u8).collect();
 
         let mut reference: u32 = !0;
         for &byte in &data {

@@ -9,23 +9,26 @@
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(u8)]
 pub enum Filter {
+    /// No prediction; the bytes are stored as they are.
     None = 0,
+    /// Predicts from the byte one pixel to the left.
     Sub = 1,
+    /// Predicts from the byte directly above.
     Up = 2,
+    /// Predicts from the mean of the left and upper bytes.
     Average = 3,
+    /// Predicts from whichever of left, upper and upper-left is nearest their linear
+    /// estimate, which follows an edge rather than smearing across it.
     Paeth = 4,
 }
 
 impl Filter {
     /// Every filter, in the order their type bytes are numbered.
-    pub const ALL: [Filter; 5] = [
-        Filter::None,
-        Filter::Sub,
-        Filter::Up,
-        Filter::Average,
-        Filter::Paeth,
-    ];
+    pub const ALL: [Filter; 5] =
+        [Filter::None, Filter::Sub, Filter::Up, Filter::Average, Filter::Paeth];
 
+    /// Reads a filter from a scanline's prefix byte, which is the discriminant itself.
+    /// `None` for anything outside `0..=4`.
     #[inline]
     pub fn from_byte(byte: u8) -> Option<Self> {
         match byte {
@@ -96,7 +99,7 @@ fn unfilter_first_row<const BPP: usize>(filter: Filter, row: &mut [u8]) {
         Filter::None | Filter::Up => {}
         Filter::Sub | Filter::Paeth => {
             let mut left = [0u8; BPP];
-            for pixel in row.chunks_exact_mut(BPP) {
+            for pixel in row.as_chunks_mut::<BPP>().0 {
                 for k in 0..BPP {
                     left[k] = pixel[k].wrapping_add(left[k]);
                 }
@@ -105,7 +108,7 @@ fn unfilter_first_row<const BPP: usize>(filter: Filter, row: &mut [u8]) {
         }
         Filter::Average => {
             let mut left = [0u8; BPP];
-            for pixel in row.chunks_exact_mut(BPP) {
+            for pixel in row.as_chunks_mut::<BPP>().0 {
                 for k in 0..BPP {
                     left[k] = pixel[k].wrapping_add(left[k] >> 1);
                 }
@@ -129,7 +132,7 @@ fn unfilter_row<const BPP: usize>(filter: Filter, prev: &[u8], row: &mut [u8]) {
         Filter::None => {}
         Filter::Sub => {
             let mut left = [0u8; BPP];
-            for pixel in row.chunks_exact_mut(BPP) {
+            for pixel in row.as_chunks_mut::<BPP>().0 {
                 for k in 0..BPP {
                     left[k] = pixel[k].wrapping_add(left[k]);
                 }
@@ -144,7 +147,9 @@ fn unfilter_row<const BPP: usize>(filter: Filter, prev: &[u8], row: &mut [u8]) {
         }
         Filter::Average => {
             let mut left = [0u8; BPP];
-            for (pixel, above) in row.chunks_exact_mut(BPP).zip(prev.chunks_exact(BPP)) {
+            for (pixel, above) in
+                row.as_chunks_mut::<BPP>().0.iter_mut().zip(prev.as_chunks::<BPP>().0)
+            {
                 for k in 0..BPP {
                     let sum = left[k] as u16 + above[k] as u16;
                     left[k] = pixel[k].wrapping_add((sum >> 1) as u8);
@@ -155,7 +160,9 @@ fn unfilter_row<const BPP: usize>(filter: Filter, prev: &[u8], row: &mut [u8]) {
         Filter::Paeth => {
             let mut left = [0u8; BPP];
             let mut upper_left = [0u8; BPP];
-            for (pixel, above) in row.chunks_exact_mut(BPP).zip(prev.chunks_exact(BPP)) {
+            for (pixel, above) in
+                row.as_chunks_mut::<BPP>().0.iter_mut().zip(prev.as_chunks::<BPP>().0)
+            {
                 for k in 0..BPP {
                     left[k] = pixel[k].wrapping_add(paeth(
                         left[k] as i16,
@@ -335,11 +342,7 @@ fn unfilter_image_bpp<const BPP: usize>(
             unfilter_first_row::<BPP>(filter, &mut buffer[..row_bytes]);
         } else {
             let (above, current) = buffer.split_at_mut(dest);
-            unfilter_row::<BPP>(
-                filter,
-                &above[dest - row_bytes..],
-                &mut current[..row_bytes],
-            );
+            unfilter_row::<BPP>(filter, &above[dest - row_bytes..], &mut current[..row_bytes]);
         }
         row += 1;
     }
@@ -387,8 +390,11 @@ pub fn filter_row<const BPP: usize>(filter: Filter, prev: &[u8], row: &[u8], out
                 out[i] = row[i].wrapping_sub(prev[i]);
             }
             for i in BPP..len {
-                out[i] = row[i]
-                    .wrapping_sub(paeth(row[i - BPP] as i16, prev[i] as i16, prev[i - BPP] as i16));
+                out[i] = row[i].wrapping_sub(paeth(
+                    row[i - BPP] as i16,
+                    prev[i] as i16,
+                    prev[i - BPP] as i16,
+                ));
             }
         }
     }
@@ -548,7 +554,11 @@ mod tests {
         for a in 0..=255u8 {
             for b in [0u8, 1, 63, 127, 128, 200, 255] {
                 for c in [0u8, 1, 63, 127, 128, 200, 255] {
-                    assert_eq!(paeth(a as i16, b as i16, c as i16), reference(a, b, c), "{a} {b} {c}");
+                    assert_eq!(
+                        paeth(a as i16, b as i16, c as i16),
+                        reference(a, b, c),
+                        "{a} {b} {c}"
+                    );
                 }
             }
         }

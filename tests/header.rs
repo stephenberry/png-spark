@@ -53,10 +53,7 @@ fn the_header_read_is_the_weaker_check_of_the_two() {
     // An unknown critical chunk after the image data.
     let hidden = splice_before_end(&png, b"ZzZz", b"");
     assert!(png_spark::read_info(&hidden).is_ok(), "the header is intact and is read as such");
-    assert_eq!(
-        png_spark::decode(&hidden),
-        Err(Error::UnknownCriticalChunk { chunk: *b"ZzZz" })
-    );
+    assert_eq!(png_spark::decode(&hidden), Err(Error::UnknownCriticalChunk { chunk: *b"ZzZz" }));
 
     // A truncated trailer after the image data.
     let cut = &png[..png.len() - 4];

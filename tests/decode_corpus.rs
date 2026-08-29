@@ -43,6 +43,11 @@ fn decodes_reference_images() {
     }
 
     assert!(checked > 0, "no images found in {}", dir.display());
-    assert!(failures.is_empty(), "{} of {checked} failed:\n{}", failures.len(), failures.join("\n"));
+    assert!(
+        failures.is_empty(),
+        "{} of {checked} failed:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
     eprintln!("checked {checked} images");
 }

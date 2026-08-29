@@ -12,7 +12,10 @@ pub enum Error {
     /// The file ended in the middle of a chunk.
     TruncatedChunk,
     /// A chunk's stored CRC does not match its contents.
-    BadChunkCrc { chunk: [u8; 4] },
+    BadChunkCrc {
+        /// Type of the chunk whose stored CRC did not match its contents.
+        chunk: [u8; 4],
+    },
     /// The first chunk was not `IHDR`.
     MissingHeader,
     /// The file contained no `IDAT` chunk.
@@ -20,16 +23,27 @@ pub enum Error {
     /// An indexed image had no `PLTE` chunk.
     MissingPalette,
     /// A chunk carried a length the specification does not allow.
-    InvalidChunkLength { chunk: [u8; 4], length: usize },
+    InvalidChunkLength {
+        /// Type of the offending chunk.
+        chunk: [u8; 4],
+        /// The length it carried.
+        length: usize,
+    },
     /// A metadata chunk's type is not one the encoder is allowed to write.
     ///
     /// See [`Chunk::validate`](crate::common::Chunk::validate) for the rules.
-    InvalidChunkType { chunk: [u8; 4] },
+    InvalidChunkType {
+        /// The type that broke the rules.
+        chunk: [u8; 4],
+    },
     /// A chunk marked critical was not one this decoder understands.
     ///
     /// A critical chunk may change how the image is to be interpreted, so ignoring one
     /// risks producing the wrong pixels rather than an error.
-    UnknownCriticalChunk { chunk: [u8; 4] },
+    UnknownCriticalChunk {
+        /// The critical type this decoder does not implement.
+        chunk: [u8; 4],
+    },
     /// `IHDR` declared a zero width or height.
     EmptyImage,
     /// The image is too large to address on this platform.
@@ -39,25 +53,51 @@ pub enum Error {
     /// `IHDR` states how large an image expands to before any of it has been read, so a
     /// thirteen-byte header can ask for a buffer of any size the platform can address. See
     /// [`Decoder::max_decompressed_size`](crate::Decoder::max_decompressed_size).
-    SizeLimitExceeded { size: usize, limit: usize },
+    SizeLimitExceeded {
+        /// Bytes the header says the image expands to.
+        size: usize,
+        /// The decoder's ceiling on that figure.
+        limit: usize,
+    },
     /// The allocator could not provide a buffer the image needs.
-    OutOfMemory { bytes: usize },
+    OutOfMemory {
+        /// Size of the allocation the allocator refused.
+        bytes: usize,
+    },
     /// `IHDR` declared a colour type that is not one of the five PNG defines.
     InvalidColorType(u8),
     /// `IHDR` declared a bit depth that is not valid for its colour type.
-    InvalidBitDepth { color_type: u8, bit_depth: u8 },
+    InvalidBitDepth {
+        /// The colour type, as its `IHDR` byte.
+        color_type: u8,
+        /// The bit depth that is not allowed with it.
+        bit_depth: u8,
+    },
     /// `IHDR` declared a compression or filter method other than the single defined one.
-    UnsupportedMethod { field: &'static str, value: u8 },
+    UnsupportedMethod {
+        /// Which `IHDR` field: `"compression method"` or `"filter method"`.
+        field: &'static str,
+        /// The value it held.
+        value: u8,
+    },
     /// `IHDR` declared an interlace method other than none or Adam7.
     InvalidInterlaceMethod(u8),
     /// A scanline used a filter byte outside `0..=4`.
-    InvalidFilter { row: usize },
+    InvalidFilter {
+        /// Index of the scanline, counted within the pass for an interlaced image.
+        row: usize,
+    },
     /// A palette index referred past the end of `PLTE`.
     PaletteIndexOutOfRange,
     /// The compressed image data could not be decoded.
     Inflate(InflateError),
     /// The pixel buffer handed to the encoder is not the size the header describes.
-    WrongBufferSize { expected: usize, found: usize },
+    WrongBufferSize {
+        /// Bytes the header describes.
+        expected: usize,
+        /// Bytes actually handed over.
+        found: usize,
+    },
 }
 
 impl From<InflateError> for Error {
