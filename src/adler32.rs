@@ -28,6 +28,9 @@ const NMAX: usize = 5552;
 ///
 /// Using it as the block size keeps every vector block exactly full, so the scalar tail only
 /// runs once at the very end of the input rather than once per block.
+///
+/// Only the NEON path blocks this way; the portable one works in `NMAX` directly.
+#[cfg(target_arch = "aarch64")]
 const BLOCK: usize = 5504;
 
 /// Incremental Adler-32 hasher.
