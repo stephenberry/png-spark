@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  # The crate has no dependencies, so nothing drifts underneath it except the toolchain
+  # itself. Clippy runs at `-D warnings` on stable, and a new stable ships roughly every six
+  # weeks, so this surfaces a new lint on a quiet Monday rather than mid-change.
+  schedule:
+    - cron: "0 6 * * 1"
 
 # A new push to a branch makes the run in flight for it redundant.
 concurrency:
@@ -115,3 +120,34 @@ jobs:
       # Catches a crate that builds in the workspace but not from its published tarball,
       # which is the failure you otherwise discover after the version is permanent.
       - run: cargo publish --dry-run
+
+  fuzz:
+    # Weekly and on demand only. Fuzzing is a search with no point at which it is finished,
+    # so it does not belong on the path between a push and a green tick.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+      # Starting from real images of every colour type and bit depth, rather than making the
+      # fuzzer rediscover the PNG signature before it can reach any of the interesting code.
+      - name: Seed the corpus
+        run: |
+          python tools/gen_testdata.py
+          mkdir -p fuzz/corpus/decode fuzz/corpus/roundtrip
+          cp tmp/png/*.png fuzz/corpus/decode/
+          cp tmp/png/*.png fuzz/corpus/roundtrip/
+      - run: cargo fuzz run decode -- -max_total_time=300
+      - run: cargo fuzz run roundtrip -- -max_total_time=300
+      - run: cargo fuzz run inflate -- -max_total_time=300
+      - name: Save the input that failed
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts
+          path: fuzz/artifacts

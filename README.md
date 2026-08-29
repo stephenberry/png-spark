@@ -162,6 +162,22 @@ cargo fmt --all --check           # style settings live in rustfmt.toml
 
 Rust 1.96 or newer, edition 2024. CI runs all of the above on Linux, macOS and Windows, across x86-64 and AArch64, plus Miri over the unsafe code and a publish dry run.
 
+### Fuzzing
+
+Three targets, run weekly in CI and available locally with a nightly toolchain and `cargo install cargo-fuzz`:
+
+```sh
+python3 tools/gen_testdata.py                    # seeds, if not already generated
+mkdir -p fuzz/corpus/decode fuzz/corpus/roundtrip
+cp tmp/png/*.png fuzz/corpus/decode/
+cp tmp/png/*.png fuzz/corpus/roundtrip/
+cargo +nightly fuzz run decode                   # arbitrary bytes through the decoder
+cargo +nightly fuzz run roundtrip                # decode, re-encode, decode, compare pixels
+cargo +nightly fuzz run inflate                  # arbitrary bytes through the decompressor
+```
+
+`decode` and `inflate` fail on a panic or a hang. `roundtrip` additionally fails on a wrong answer: whatever the decoder accepts must survive being written back out and read again with the same pixels. Seeding from the generated images matters, since a fuzzer starting from nothing spends most of its budget rediscovering the PNG signature.
+
 The corpus is produced by a reference implementation rather than by png-spark, so the tests check the format and not just self-consistency: 224 zlib streams from zlib itself at every level and window size, and 180 PNGs covering every colour type, bit depth, interlace mode and filter combination. The benchmark crate additionally round-trips png-spark's output through `fdeflate` and the `png` crate, and `fdeflate`'s output back through png-spark.
 
 ### Real-world corpora

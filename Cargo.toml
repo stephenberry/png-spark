@@ -8,7 +8,7 @@ description = "A fast, zero-dependency PNG encoder and decoder supporting every 
 repository = "https://github.com/stephenberry/png-spark"
 keywords = ["png", "image", "deflate", "inflate", "encoding"]
 categories = ["multimedia::images", "compression"]
-exclude = ["bench/", ".github/"]
+exclude = ["bench/", "fuzz/", ".github/"]
 
 [dependencies]
 
