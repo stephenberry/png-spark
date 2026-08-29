@@ -1,0 +1,16 @@
+[package]
+name = "png-spark-bench"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Benchmark harness only. `png-spark` itself has no dependencies; these exist solely to
+# compare against the crates this library aims to beat.
+[dependencies]
+png-spark = { path = ".." }
+png = "0.18"
+fdeflate = "0.3"
+
+[[bin]]
+name = "bench"
+path = "src/main.rs"

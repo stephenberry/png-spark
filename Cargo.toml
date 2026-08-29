@@ -1,0 +1,26 @@
+[package]
+name = "png-spark"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+license = "MIT OR Apache-2.0"
+description = "A fast, zero-dependency PNG encoder and decoder supporting every colour type and bit depth."
+repository = "https://github.com/stephenberry/png-spark"
+keywords = ["png", "image", "deflate", "inflate", "encoding"]
+categories = ["multimedia::images", "compression"]
+exclude = ["bench/", "tests/images/"]
+
+[dependencies]
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+
+[profile.bench]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+
+[workspace]
+members = [".", "bench"]
