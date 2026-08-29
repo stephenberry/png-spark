@@ -11,9 +11,12 @@ on:
   schedule:
     - cron: "0 6 * * 1"
 
-# A new push to a branch makes the run in flight for it redundant.
+# A new push to a pull request makes the run in flight for it redundant. Everything else
+# gets its own group via `run_id`, so a run on `main` is never cancelled: every commit on the
+# default branch of a released library deserves validation, and a manual dispatch is a
+# separate intent rather than a replacement for the push already running.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
   cancel-in-progress: true
 
 env:
