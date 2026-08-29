@@ -1,0 +1,106 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A new push to a branch makes the run in flight for it redundant.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: test / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # x86-64 and AArch64 on both Linux and macOS, because the checksums have
+        # architecture-specific paths and the portable fallbacks must agree with them.
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      # The corpus is generated, not committed. Without this step the tests that read it
+      # skip themselves and the run passes having checked far less than it appears to.
+      - name: Generate the reference corpus
+        run: python tools/gen_testdata.py
+      - name: Test (debug)
+        run: cargo test --all-targets
+      - name: Doc tests
+        run: cargo test --doc
+      # Release is a separate gate, not a repeat: the debug build hides anything that only
+      # an optimiser can remove.
+      - name: Test (release)
+        run: cargo test --release --all-targets
+
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build documentation
+        run: cargo doc --no-deps
+        env:
+          # Broken intra-doc links and private links from public items fail the build here
+          # rather than surfacing as a bad page on docs.rs.
+          RUSTDOCFLAGS: -D warnings
+
+  msrv:
+    name: msrv (1.80)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Pinned to the `rust-version` in Cargo.toml. Raising one means raising the other.
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.80"
+      - run: cargo check --all-targets
+
+  miri:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri
+      # The unsafe is confined to the library's own unit tests; the integration tests go
+      # through the same code far more slowly.
+      - run: cargo miri test --lib
+
+  cross-check:
+    name: cross-check against png and fdeflate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # Round-tripping through our own code only proves self-consistency. This hands the
+      # output to independent implementations of both formats.
+      - run: cargo test -p png-spark-bench
+
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # Catches a crate that builds in the workspace but not from its published tarball,
+      # which is the failure you otherwise discover after the version is permanent.
+      - run: cargo publish --dry-run

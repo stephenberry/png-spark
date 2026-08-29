@@ -136,7 +136,24 @@ impl Chunk {
         Self { kind, data }
     }
 
-    /// Checks that this chunk is one the encoder can write. See [`writable_kind`].
+    /// Checks that this chunk is one the encoder can write.
+    ///
+    /// The type must be four ASCII letters, its first lower case, and its third upper case. A
+    /// critical type is rejected because the encoder writes the critical chunks itself and a
+    /// decoder must fail on a critical type it does not know, so accepting one would produce a
+    /// file png-spark could not read back. A lower-case third byte is reserved by the
+    /// specification and means nothing yet.
+    ///
+    /// `tRNS` is excluded for the same reason as the critical types: the encoder writes it
+    /// itself from [`Info::transparency`], where it is checked against the colour type. A second
+    /// one here would be an illegal duplicate, would silently displace the real transparency on
+    /// read-back, and if its length did not suit the colour type would produce a file png-spark
+    /// itself rejects.
+    ///
+    /// The payload is limited to `i32::MAX` bytes, the longest a PNG chunk may declare.
+    ///
+    /// Both sides of the library apply this, so anything the decoder hands back in
+    /// [`Info::metadata`] can be handed to the encoder again.
     pub fn validate(&self) -> Result<(), Error> {
         if !writable_kind(self.kind) {
             return Err(Error::InvalidChunkType { chunk: self.kind });
@@ -150,20 +167,7 @@ impl Chunk {
 
 /// Whether `kind` names a chunk png-spark will carry as metadata.
 ///
-/// The type must be four ASCII letters, its first lower case, and its third upper case. A
-/// critical type is rejected because the encoder writes the critical chunks itself and a
-/// decoder must fail on a critical type it does not know, so accepting one would produce a
-/// file png-spark could not read back. A lower-case third byte is reserved by the
-/// specification and means nothing yet.
-///
-/// `tRNS` is excluded for the same reason as the critical types: the encoder writes it
-/// itself from [`Info::transparency`], where it is checked against the colour type. A second
-/// one here would be an illegal duplicate, would silently displace the real transparency on
-/// read-back, and if its length did not suit the colour type would produce a file png-spark
-/// itself rejects.
-///
-/// Both sides of the library use this, so anything the decoder hands back in
-/// [`Info::metadata`] can be handed to the encoder again.
+/// The rules, and the reasons behind them, are documented on [`Chunk::validate`].
 pub(crate) fn writable_kind(kind: [u8; 4]) -> bool {
     kind.iter().all(u8::is_ascii_alphabetic)
         && kind[0].is_ascii_lowercase()

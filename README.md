@@ -1,5 +1,9 @@
 # png-spark
 
+[![CI](https://github.com/stephenberry/png-spark/actions/workflows/ci.yml/badge.svg)](https://github.com/stephenberry/png-spark/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/png-spark.svg)](https://crates.io/crates/png-spark)
+[![docs.rs](https://docs.rs/png-spark/badge.svg)](https://docs.rs/png-spark)
+
 A fast PNG encoder and decoder for Rust, with **zero dependencies**. Complete format coverage, and a single compression setting chosen for speed.
 
 png-spark implements the whole PNG format — every colour type, every bit depth, interlaced or not — on top of its own DEFLATE codec, its own checksums, and its own filter code. Nothing outside the standard library is involved.
