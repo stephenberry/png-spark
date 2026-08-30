@@ -10,7 +10,7 @@ png-spark implements the whole PNG format — every colour type, every bit depth
 
 ```toml
 [dependencies]
-png-spark = "0.1"
+png-spark = "0.2"
 ```
 
 ```rust
@@ -22,6 +22,13 @@ let rgba = image.to_rgba8()?;
 // Encode
 let png = png_spark::encode_rgba8(image.width(), image.height(), &rgba)?;
 std::fs::write("output.png", png)?;
+```
+
+Or write straight to a file, or anything else that takes bytes, without the encoded image ever being resident:
+
+```rust
+let mut file = std::io::BufWriter::new(std::fs::File::create("output.png")?);
+png_spark::Encoder::new().encode_to(&image.info, &image.data, &mut file)?;
 ```
 
 ## Why
@@ -125,6 +132,8 @@ Decoding keeps nothing by default, since retaining a chunk means copying it and 
 Payloads are written exactly as given; compress yours first if it is worth compressing.
 
 ## Design notes
+
+**Encoding works in bands.** A scanline's filter is chosen from the row above it and the compressor's blocks are independent of one another, so the encoder filters and compresses a couple of hundred kilobytes at a time rather than building a filtered copy of the whole image and compressing that. The band is still in cache when the compressor reads it, and `encode_to` can hand each `IDAT` to a sink as it is finished, so what is held grows with the image's width but not with its height. A chunk states its length before its data, which is why the compressed output is buffered to a chunk's worth and no further.
 
 **Decoding gives you the file's own format.** `decode` returns pixels exactly as the file stores them, because that is the only representation that is always correct and always free. `to_rgba8` and `to_rgb8` convert when you want a uniform layout.
 

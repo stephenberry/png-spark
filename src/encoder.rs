@@ -1,9 +1,9 @@
 //! PNG encoding.
 
 use crate::common::{Chunk, ColorType, Info, SIGNATURE};
-use crate::crc32::crc32;
+use crate::crc32::Crc32;
 use crate::deflate::Deflater;
-use crate::error::Error;
+use crate::error::{Error, WriteError};
 use crate::filter::{Filter, filter_row};
 
 /// How the encoder picks a filter for each scanline.
@@ -63,14 +63,34 @@ const PAETH_HANDICAP_PERCENT: u64 = 10;
 /// which matters because the channels of an image rarely have the same statistics.
 const SAMPLE_STEP: usize = 8;
 
+/// Bytes of filtered scanline the encoder works on at a time.
+///
+/// Matched to the compressor's own block, so an ordinary image's band is one block and the
+/// per-block Huffman code is fitted to as much data as it would have been. A band is always a
+/// whole number of rows, since the filter is chosen per row, so a single row wider than this
+/// makes a larger band rather than a partial one.
+///
+/// Working in bands is also why the encoder needs no second image-sized buffer: a band is
+/// still in cache when the compressor reads it back.
+const BAND_TARGET_BYTES: usize = 256 * 1024;
+
+/// Largest `IDAT` payload written at once.
+///
+/// A chunk states its length before its data, so this much compressed output has to be held
+/// before any of it can be written. Splitting the image data across several `IDAT` chunks is
+/// ordinary PNG, and every decoder joins them back together.
+const IDAT_CHUNK_BYTES: usize = 64 * 1024;
+
 /// A reusable PNG encoder.
 pub struct Encoder {
     deflater: Deflater,
     strategy: FilterStrategy,
-    /// Filter bytes and filtered scanlines, ready to compress.
+    /// Filter bytes and filtered scanlines for the band being compressed.
     filtered: Vec<u8>,
     /// An all-zero row, standing in for the row above the first one.
     zero_row: Vec<u8>,
+    /// Compressed bytes not yet long enough to fill an `IDAT`.
+    idat: Vec<u8>,
 }
 
 impl core::fmt::Debug for Encoder {
@@ -99,6 +119,7 @@ impl Encoder {
             strategy: FilterStrategy::default(),
             filtered: Vec::new(),
             zero_row: Vec::new(),
+            idat: Vec::new(),
         }
     }
 
@@ -114,18 +135,62 @@ impl Encoder {
     /// packed scanlines with no filter bytes. Interlaced output is not produced; an `info`
     /// asking for it is encoded progressively-free instead, which any decoder reads
     /// identically.
+    ///
+    /// See [`Encoder::encode_to`] to write somewhere other than memory.
     pub fn encode(&mut self, info: &Info, data: &[u8], output: &mut Vec<u8>) -> Result<(), Error> {
+        match self.encode_to(info, data, output) {
+            Ok(()) => Ok(()),
+            Err(WriteError::Encode(error)) => Err(error),
+            // `Vec` is the one sink whose writes cannot fail: its `write_all` is an
+            // `extend_from_slice`, and an allocation it cannot satisfy aborts rather than
+            // returning. Nothing reaches here.
+            Err(WriteError::Io(error)) => {
+                unreachable!("writing a PNG into a Vec returned an io error: {error}")
+            }
+        }
+    }
+
+    /// Encodes `data` as a PNG written to `output`.
+    ///
+    /// The image is filtered and compressed a band at a time and the compressed bytes leave
+    /// as they are produced, so neither the finished file nor a filtered copy of the image is
+    /// ever resident. Peak working memory is a band, a scanline and a chunk: a few hundred kilobytes for ordinary images. It grows with the image's width but not with its height, against the whole encoded file plus a filtered copy of every row for
+    /// [`Encoder::encode`].
+    ///
+    /// [`Encoder::encode`] is this with a `Vec` sink, so the two write identical bytes.
+    ///
+    /// Nothing is written until `info` and `data` have been checked, so a
+    /// [`WriteError::Encode`] leaves `output` untouched. A [`WriteError::Io`] can leave a
+    /// partial file behind, since by then the earlier chunks have gone.
+    ///
+    /// ```no_run
+    /// # fn main() -> Result<(), png_spark::WriteError> {
+    /// # let (info, pixels) = (png_spark::Info::new(1, 1, png_spark::ColorType::Rgba,
+    /// #     png_spark::BitDepth::Eight), vec![0u8; 4]);
+    /// let mut file = std::io::BufWriter::new(std::fs::File::create("out.png")?);
+    /// png_spark::Encoder::new().encode_to(&info, &pixels, &mut file)?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn encode_to<W: std::io::Write>(
+        &mut self,
+        info: &Info,
+        data: &[u8],
+        mut output: W,
+    ) -> Result<(), WriteError> {
         info.validate()?;
         if data.len() != info.output_size() {
-            return Err(Error::WrongBufferSize { expected: info.output_size(), found: data.len() });
+            return Err(
+                Error::WrongBufferSize { expected: info.output_size(), found: data.len() }.into()
+            );
         }
         if info.color_type == ColorType::Indexed && info.palette.is_none() {
-            return Err(Error::MissingPalette);
+            return Err(Error::MissingPalette.into());
         }
         if let Some(palette) = &info.palette
             && (palette.len() > 256 * 3 || !palette.len().is_multiple_of(3))
         {
-            return Err(Error::InvalidChunkLength { chunk: *b"PLTE", length: palette.len() });
+            return Err(Error::InvalidChunkLength { chunk: *b"PLTE", length: palette.len() }.into());
         }
         if let Some(transparency) = &info.transparency {
             crate::decoder::validate_trns(info, transparency)?;
@@ -134,77 +199,88 @@ impl Encoder {
             chunk.validate()?;
         }
 
-        output.extend_from_slice(&SIGNATURE);
+        write_leading_chunks(info, &mut output)?;
 
-        let mut header = [0u8; 13];
-        header[0..4].copy_from_slice(&info.width.to_be_bytes());
-        header[4..8].copy_from_slice(&info.height.to_be_bytes());
-        header[8] = info.bit_depth.bits() as u8;
-        header[9] = info.color_type as u8;
-        header[10] = 0; // compression method: deflate
-        header[11] = 0; // filter method: the five adaptive filters
-        header[12] = 0; // interlace method: none
-        write_chunk(output, b"IHDR", &header);
+        let row_bytes = info.row_bytes();
+        let height = info.height as usize;
+        // At least one row, however wide: a single scanline of a very large image can exceed
+        // the target on its own, and a band has to be a whole number of rows because the
+        // filter is chosen per row.
+        let band_rows = (BAND_TARGET_BYTES / (1 + row_bytes)).max(1);
 
-        // Metadata is written in the order it was given, split around `PLTE`: the types
-        // listed at `BEFORE_PLTE` go ahead of the palette because the specification puts
-        // them there, and everything else goes after it, which is where the types that must
-        // follow `PLTE` need to be and is legal for the rest.
-        for chunk in info.metadata.iter().filter(|chunk| precedes_palette(chunk)) {
-            write_chunk(output, &chunk.kind, &chunk.data);
+        self.zero_row.clear();
+        self.zero_row.resize(row_bytes, 0);
+        // Sized once for the widest band; `filter_rows` overwrites every byte it uses, so the
+        // zero fill here is the only one and the per-band resize below never grows it.
+        self.filtered.clear();
+        self.filtered.resize(band_rows * (1 + row_bytes), 0);
+        self.idat.clear();
+        let mut stream = self.deflater.zlib_start(&mut self.idat);
+
+        // The filter choice is sticky from one row to the next, and that has to survive a
+        // band boundary or the bands would each restart the heuristic.
+        let mut chosen = Filter::None;
+        let mut first = 0usize;
+        while first < height {
+            let past = (first + band_rows).min(height);
+            let band = self.filter_band(info, data, first, past, &mut chosen);
+            self.deflater.zlib_push(
+                &mut stream,
+                &self.filtered[..band],
+                past == height,
+                &mut self.idat,
+            );
+
+            // Every full chunk goes out before anything is moved, so the band costs one
+            // compaction of the short tail rather than one per chunk.
+            let mut sent = 0;
+            while self.idat.len() - sent >= IDAT_CHUNK_BYTES {
+                write_chunk(&mut output, b"IDAT", &self.idat[sent..sent + IDAT_CHUNK_BYTES])?;
+                sent += IDAT_CHUNK_BYTES;
+            }
+            self.idat.drain(..sent);
+            first = past;
+        }
+        if !self.idat.is_empty() {
+            write_chunk(&mut output, b"IDAT", &self.idat)?;
         }
 
-        if let Some(palette) = &info.palette {
-            write_chunk(output, b"PLTE", palette);
-        }
-        if let Some(transparency) = &info.transparency {
-            write_chunk(output, b"tRNS", transparency);
-        }
-
-        for chunk in info.metadata.iter().filter(|chunk| !precedes_palette(chunk)) {
-            write_chunk(output, &chunk.kind, &chunk.data);
-        }
-
-        self.filter_image(info, data);
-
-        // The compressed data is written straight into the output, and the chunk's length
-        // and CRC are filled in afterwards, so the image never exists as a second copy.
-        let start = output.len();
-        output.extend_from_slice(&[0, 0, 0, 0]);
-        output.extend_from_slice(b"IDAT");
-        self.deflater.zlib(&self.filtered, output);
-        let length = (output.len() - start - 8) as u32;
-        output[start..start + 4].copy_from_slice(&length.to_be_bytes());
-        let checksum = crc32(&output[start + 4..]);
-        output.extend_from_slice(&checksum.to_be_bytes());
-
-        write_chunk(output, b"IEND", &[]);
+        output.write_all(&IEND)?;
         Ok(())
     }
 
-    fn filter_image(&mut self, info: &Info, data: &[u8]) {
+    /// Filters rows `first..past` into [`Encoder::filtered`], carrying the filter choice.
+    /// Returns how much of [`Encoder::filtered`] the band occupies.
+    fn filter_band(
+        &mut self,
+        info: &Info,
+        data: &[u8],
+        first: usize,
+        past: usize,
+        chosen: &mut Filter,
+    ) -> usize {
         let row_bytes = info.row_bytes();
-        let height = info.height as usize;
-
-        self.filtered.clear();
-        self.filtered.resize(height * (1 + row_bytes), 0);
-        self.zero_row.clear();
-        self.zero_row.resize(row_bytes, 0);
-
         match info.filter_stride() {
-            1 => self.filter_rows::<1>(data, row_bytes, height),
-            2 => self.filter_rows::<2>(data, row_bytes, height),
-            3 => self.filter_rows::<3>(data, row_bytes, height),
-            4 => self.filter_rows::<4>(data, row_bytes, height),
-            6 => self.filter_rows::<6>(data, row_bytes, height),
-            8 => self.filter_rows::<8>(data, row_bytes, height),
+            1 => self.filter_rows::<1>(data, row_bytes, first, past, chosen),
+            2 => self.filter_rows::<2>(data, row_bytes, first, past, chosen),
+            3 => self.filter_rows::<3>(data, row_bytes, first, past, chosen),
+            4 => self.filter_rows::<4>(data, row_bytes, first, past, chosen),
+            6 => self.filter_rows::<6>(data, row_bytes, first, past, chosen),
+            8 => self.filter_rows::<8>(data, row_bytes, first, past, chosen),
             _ => unreachable!("PNG pixel strides are 1, 2, 3, 4, 6 or 8 bytes"),
         }
+        (past - first) * (1 + row_bytes)
     }
 
-    fn filter_rows<const BPP: usize>(&mut self, data: &[u8], row_bytes: usize, height: usize) {
-        let mut chosen = Filter::None;
-        for index in 0..height {
+    fn filter_rows<const BPP: usize>(
+        &mut self,
+        data: &[u8],
+        row_bytes: usize,
+        first: usize,
+        past: usize,
+        chosen: &mut Filter,
+    ) {
+        for index in first..past {
             let row = &data[index * row_bytes..(index + 1) * row_bytes];
             let previous = if index == 0 {
                 &self.zero_row[..]
@@ -214,12 +290,14 @@ impl Encoder {
 
             let filter = match self.strategy {
                 FilterStrategy::Fixed(filter) => filter,
-                FilterStrategy::Adaptive => choose_filter::<BPP>(previous, row, 1, chosen),
-                FilterStrategy::Sampled => choose_filter::<BPP>(previous, row, SAMPLE_STEP, chosen),
+                FilterStrategy::Adaptive => choose_filter::<BPP>(previous, row, 1, *chosen),
+                FilterStrategy::Sampled => {
+                    choose_filter::<BPP>(previous, row, SAMPLE_STEP, *chosen)
+                }
             };
-            chosen = filter;
+            *chosen = filter;
 
-            let base = index * (1 + row_bytes);
+            let base = (index - first) * (1 + row_bytes);
             self.filtered[base] = filter as u8;
             filter_row::<BPP>(
                 filter,
@@ -368,14 +446,66 @@ fn precedes_palette(chunk: &Chunk) -> bool {
     BEFORE_PLTE.contains(&chunk.kind)
 }
 
-fn write_chunk(output: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
-    output.extend_from_slice(&(data.len() as u32).to_be_bytes());
-    let start = output.len();
-    output.extend_from_slice(kind);
-    output.extend_from_slice(data);
-    let checksum = crc32(&output[start..]);
-    output.extend_from_slice(&checksum.to_be_bytes());
+/// Writes the signature and every chunk that precedes the image data.
+fn write_leading_chunks<W: std::io::Write>(info: &Info, output: &mut W) -> Result<(), WriteError> {
+    output.write_all(&SIGNATURE)?;
+
+    let mut header = [0u8; 13];
+    header[0..4].copy_from_slice(&info.width.to_be_bytes());
+    header[4..8].copy_from_slice(&info.height.to_be_bytes());
+    header[8] = info.bit_depth.bits() as u8;
+    header[9] = info.color_type as u8;
+    header[10] = 0; // compression method: deflate
+    header[11] = 0; // filter method: the five adaptive filters
+    header[12] = 0; // interlace method: none
+    write_chunk(output, b"IHDR", &header)?;
+
+    // Metadata is written in the order it was given, split around `PLTE`: the types listed at
+    // `BEFORE_PLTE` go ahead of the palette because the specification puts them there, and
+    // everything else goes after it, which is where the types that must follow `PLTE` need to
+    // be and is legal for the rest.
+    for chunk in info.metadata.iter().filter(|chunk| precedes_palette(chunk)) {
+        write_chunk(output, &chunk.kind, &chunk.data)?;
+    }
+
+    if let Some(palette) = &info.palette {
+        write_chunk(output, b"PLTE", palette)?;
+    }
+    if let Some(transparency) = &info.transparency {
+        write_chunk(output, b"tRNS", transparency)?;
+    }
+
+    for chunk in info.metadata.iter().filter(|chunk| !precedes_palette(chunk)) {
+        write_chunk(output, &chunk.kind, &chunk.data)?;
+    }
+    Ok(())
 }
+
+/// Writes one chunk: length, type, payload, CRC.
+///
+/// The CRC is accumulated over the pieces as they go out rather than taken over a contiguous
+/// buffer, which is what lets the payload be handed straight to the sink instead of staged in
+/// one. That matters for `IDAT`, and it means an `Info` carrying a large `iCCP` profile is not
+/// copied on its way out either.
+fn write_chunk<W: std::io::Write>(
+    output: &mut W,
+    kind: &[u8; 4],
+    data: &[u8],
+) -> std::io::Result<()> {
+    let mut header = [0u8; 8];
+    header[..4].copy_from_slice(&(data.len() as u32).to_be_bytes());
+    header[4..].copy_from_slice(kind);
+    output.write_all(&header)?;
+    output.write_all(data)?;
+
+    let mut checksum = Crc32::new();
+    checksum.update(&header[4..]);
+    checksum.update(data);
+    output.write_all(&checksum.finish().to_be_bytes())
+}
+
+/// `IEND` is the same twelve bytes in every PNG ever written, CRC included.
+const IEND: [u8; 12] = [0, 0, 0, 0, b'I', b'E', b'N', b'D', 0xAE, 0x42, 0x60, 0x82];
 
 /// Encodes an image described by `info` as a PNG, with the default settings.
 pub fn encode(info: &Info, data: &[u8]) -> Result<Vec<u8>, Error> {

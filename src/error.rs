@@ -164,3 +164,53 @@ impl std::error::Error for Error {}
 fn chunk_name(chunk: &[u8; 4]) -> String {
     chunk.escape_ascii().to_string()
 }
+
+/// Why writing a PNG to an [`io::Write`](std::io::Write) sink failed.
+///
+/// Separate from [`Error`] because an [`io::Error`](std::io::Error) is neither `Clone` nor
+/// `PartialEq`, and [`Error`] is both. Encoding into a `Vec` cannot fail this way, so the
+/// buffered entry points keep the simpler type.
+///
+/// Non-exhaustive, for the reason [`Error`] is. Match with a fallback arm.
+#[non_exhaustive]
+#[derive(Debug)]
+pub enum WriteError {
+    /// The image or its metadata is not something the encoder can write.
+    ///
+    /// Every one of these is decided before a byte reaches the sink.
+    Encode(Error),
+    /// The sink refused a write.
+    Io(std::io::Error),
+}
+
+impl From<Error> for WriteError {
+    fn from(error: Error) -> Self {
+        WriteError::Encode(error)
+    }
+}
+
+impl From<std::io::Error> for WriteError {
+    fn from(error: std::io::Error) -> Self {
+        WriteError::Io(error)
+    }
+}
+
+impl core::fmt::Display for WriteError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        // Each names its stage rather than forwarding verbatim. `source` returns the same
+        // error, so a chain-printing formatter would otherwise show the message twice.
+        match self {
+            WriteError::Encode(error) => write!(f, "cannot encode the image: {error}"),
+            WriteError::Io(error) => write!(f, "cannot write the PNG: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for WriteError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            WriteError::Encode(error) => Some(error),
+            WriteError::Io(error) => Some(error),
+        }
+    }
+}
