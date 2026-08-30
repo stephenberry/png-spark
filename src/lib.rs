@@ -48,6 +48,19 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 //!
+//! [`Encoder::encode_to`] writes to any [`io::Write`](std::io::Write) instead of to a buffer.
+//! It filters and compresses the image a band at a time and lets each `IDAT` chunk go as it
+//! is finished, so neither the encoded file nor a filtered copy of the image is ever
+//! resident. What it holds grows with the image's width but not with its height:
+//!
+//! ```no_run
+//! # let (info, pixels) = (png_spark::Info::new(1, 1, png_spark::ColorType::Rgba,
+//! #     png_spark::BitDepth::Eight), vec![0u8; 4]);
+//! let mut file = std::io::BufWriter::new(std::fs::File::create("output.png")?);
+//! png_spark::Encoder::new().encode_to(&info, &pixels, &mut file)?;
+//! # Ok::<(), png_spark::WriteError>(())
+//! ```
+//!
 //! For repeated work, reuse a [`Decoder`] or [`Encoder`]: they hold the Huffman tables and
 //! scratch buffers, so a second image costs no allocation for them.
 //!
@@ -145,5 +158,5 @@ pub mod transform;
 pub use common::{BitDepth, Chunk, ColorType, Info, Interlacing};
 pub use decoder::{Checks, DEFAULT_MAX_DECOMPRESSED_SIZE, Decoder, Image, Keep, decode, read_info};
 pub use encoder::{Encoder, FilterStrategy, encode, encode_rgb8, encode_rgba8};
-pub use error::Error;
+pub use error::{Error, WriteError};
 pub use filter::Filter;

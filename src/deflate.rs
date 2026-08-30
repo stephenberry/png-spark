@@ -275,6 +275,17 @@ impl<'a> BitWriter<'a> {
         Self { out, buffer: 0, nbits: 0 }
     }
 
+    /// Continues a stream whose last write left `nbits` bits short of a byte.
+    ///
+    /// DEFLATE blocks are not byte aligned and there is no padding between them, so a stream
+    /// compressed in pieces has to carry the partial byte across the gap rather than flush
+    /// it. Anything else would put bits into the stream that the decoder reads as the next
+    /// block's header.
+    fn resume(out: &'a mut Vec<u8>, buffer: u64, nbits: u32) -> Self {
+        debug_assert!(nbits < 8);
+        Self { out, buffer, nbits }
+    }
+
     /// Ensures `bytes` more bytes can be produced without reallocating mid-write.
     #[inline]
     fn reserve(&mut self, bytes: usize) {
@@ -332,6 +343,43 @@ impl<'a> BitWriter<'a> {
 // Compressor
 // ---------------------------------------------------------------------------------------
 
+/// What one block leaves behind for the next.
+#[derive(Debug, Default)]
+struct BlockState {
+    /// Bits per input byte the previous block needed, in 8.8 fixed point. `None` means there
+    /// is no usable measurement and the next block must be counted exactly.
+    density: Option<u64>,
+    blocks_since_exact: u32,
+}
+
+/// A zlib stream being compressed a piece at a time.
+///
+/// More crosses a block boundary than the bytes already written: the density estimate that
+/// decides between coding a block and storing it was measured from the block before, and the
+/// bit stream does not end on a byte boundary. Both live here. The Huffman code fitted to the
+/// previous block does not; it lives in the [`Deflater`], which is why two streams
+/// interleaved on one compressor spoil each other's compression. Their output stays valid,
+/// since each block header describes the code that block was actually written with, but give
+/// each stream its own [`Deflater`].
+///
+/// Created by [`Deflater::zlib_start`] and fed with [`Deflater::zlib_push`]. A stream dropped
+/// without a final push is a truncated one: nothing marks the last block and no checksum is
+/// written.
+///
+/// Push pieces of about 256 KiB or more, which is the compressor's own block size. The Huffman code is fitted per
+/// block, so pieces of a few hundred bytes each carry their own code table and compress
+/// worse than one call would; pieces at the block size cost close to nothing.
+#[derive(Debug)]
+pub struct ZlibStream {
+    block: BlockState,
+    /// Runs over every byte pushed, not per block: the trailer covers the whole stream.
+    checksum: Adler32,
+    /// Bits written that do not yet form a whole byte.
+    buffer: u64,
+    nbits: u32,
+    finished: bool,
+}
+
 /// A reusable DEFLATE compressor.
 ///
 /// Holds the Huffman tables and header scratch between calls, so compressing a second buffer
@@ -383,19 +431,64 @@ impl Deflater {
 
     /// Compresses `input` into a zlib stream appended to `output`.
     pub fn zlib(&mut self, input: &[u8], output: &mut Vec<u8>) {
+        let mut stream = self.zlib_start(output);
+        self.zlib_push(&mut stream, input, true, output);
+    }
+
+    /// Begins a zlib stream that can be fed in pieces, writing its two-byte header.
+    ///
+    /// For a caller that produces its input a band at a time and does not want to hold the
+    /// whole of it. The pieces are compressed exactly as one buffer would have been, except
+    /// that block boundaries fall where the pieces do.
+    pub fn zlib_start(&mut self, output: &mut Vec<u8>) -> ZlibStream {
         // CM = deflate, CINFO = 32 KiB window, no preset dictionary, and a check byte that
         // makes the two-byte header a multiple of 31.
         output.extend_from_slice(&[0x78, 0x01]);
-        self.raw(input, output);
-        let mut checksum = Adler32::new();
-        checksum.update(input);
-        output.extend_from_slice(&checksum.finish().to_be_bytes());
+        ZlibStream {
+            block: BlockState::default(),
+            checksum: Adler32::new(),
+            buffer: 0,
+            nbits: 0,
+            finished: false,
+        }
+    }
+
+    /// Compresses one more piece of a stream begun by [`Deflater::zlib_start`].
+    ///
+    /// `last` closes the stream: it pads to a byte boundary and appends the Adler-32 of
+    /// everything pushed. Nothing may be pushed after it.
+    pub fn zlib_push(
+        &mut self,
+        stream: &mut ZlibStream,
+        input: &[u8],
+        last: bool,
+        output: &mut Vec<u8>,
+    ) {
+        debug_assert!(!stream.finished, "pushed to a zlib stream that was already closed");
+        stream.checksum.update(input);
+
+        // An empty piece is only worth a block when it is the one that has to carry the
+        // final-block flag.
+        if !input.is_empty() || last {
+            let mut writer = BitWriter::resume(output, stream.buffer, stream.nbits);
+            self.compress(input, &mut writer, last, &mut stream.block);
+            if last {
+                writer.align();
+            }
+            stream.buffer = writer.buffer;
+            stream.nbits = writer.nbits;
+        }
+
+        if last {
+            stream.finished = true;
+            output.extend_from_slice(&stream.checksum.finish().to_be_bytes());
+        }
     }
 
     /// Compresses `input` as a bare DEFLATE stream appended to `output`.
     pub fn raw(&mut self, input: &[u8], output: &mut Vec<u8>) {
         let mut writer = BitWriter::new(output);
-        self.compress(input, &mut writer);
+        self.compress(input, &mut writer, true, &mut BlockState::default());
         writer.align();
     }
 
@@ -409,31 +502,47 @@ impl Deflater {
     /// Neighbouring blocks of an image have near-identical byte distributions - they are
     /// adjacent bands of the same picture - so a code one block out of date costs a fraction
     /// of a percent, and it halves the number of times the data is walked.
-    fn compress(&mut self, input: &[u8], writer: &mut BitWriter) {
+    ///
+    /// `state` is what crosses a block boundary, held by the caller so a stream fed in pieces
+    /// picks up where the previous piece left off. `final_piece` says whether the end of
+    /// `input` is also the end of the stream.
+    fn compress(
+        &mut self,
+        input: &[u8],
+        writer: &mut BitWriter,
+        final_piece: bool,
+        state: &mut BlockState,
+    ) {
         let mut start = 0usize;
-        // Bits per input byte the previous block needed, in 8.8 fixed point. `None` means
-        // there is no usable measurement, and the next block must be counted exactly.
-        let mut density: Option<u64> = None;
-        let mut blocks_since_exact = 0u32;
+        // Split evenly rather than taking full blocks and leaving a remainder. `density` is a
+        // per-byte rate measured by dividing a block's whole cost, header included, by its
+        // length, so a runt block reports a rate tens of times too high and the block after it
+        // is written stored on the strength of that estimate. An even split cannot produce a
+        // block small enough for its header to dominate.
+        let block_bytes = {
+            let blocks = input.len().div_ceil(RUN_BLOCK_BYTES).max(1);
+            input.len().div_ceil(blocks).max(1)
+        };
 
         loop {
-            let end = (start + RUN_BLOCK_BYTES).min(input.len());
-            let last = end == input.len();
+            let end = (start + block_bytes).min(input.len());
+            let exhausted = end == input.len();
+            let last = exhausted && final_piece;
             let bytes = end - start;
 
             // An exact count is needed to bootstrap, and worth repeating occasionally in
             // case the image changes character; the rest of the time the previous block's
             // measurement stands in, which is what lets an incompressible image skip the
             // counting pass entirely and go straight to stored blocks.
-            let exact = density.is_none() || blocks_since_exact >= RUN_PROBE_INTERVAL;
+            let exact = state.density.is_none() || state.blocks_since_exact >= RUN_PROBE_INTERVAL;
             if exact {
-                blocks_since_exact = 0;
+                state.blocks_since_exact = 0;
                 self.litlen_freq.fill(0);
                 self.dist_freq.fill(0);
                 count_runs(input, start, end, &mut self.litlen_freq, &mut self.dist_freq);
                 self.litlen_freq[256] += 1;
             } else {
-                blocks_since_exact += 1;
+                state.blocks_since_exact += 1;
             }
 
             // Give every symbol a code, whether or not the counts say it occurs. A block
@@ -453,7 +562,7 @@ impl Deflater {
 
             let header_bits = self.build_header();
             let compressed_bits = header_bits
-                + match density {
+                + match state.density {
                     Some(bits_per_byte) if !exact => bits_per_byte * bytes as u64 / 256,
                     _ => self.token_bits(),
                 };
@@ -464,15 +573,15 @@ impl Deflater {
                 // Nothing was coded, but what coding *would* have cost is still the best
                 // estimate for the next block, and it is what keeps incompressible input
                 // from being counted over and over.
-                density = Some((compressed_bits * 256 / bytes.max(1) as u64).max(1));
+                state.density = Some((compressed_bits * 256 / bytes.max(1) as u64).max(1));
             } else {
                 let before = writer.bit_position();
                 self.emit_runs(writer, input, start, end, last);
                 let used = writer.bit_position() - before;
-                density = Some((used * 256 / bytes.max(1) as u64).max(1));
+                state.density = Some((used * 256 / bytes.max(1) as u64).max(1));
             }
 
-            if last {
+            if exhausted {
                 break;
             }
             start = end;
